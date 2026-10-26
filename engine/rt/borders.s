@@ -53,6 +53,22 @@
 ; address (base and counter), fine scroll and line width itself; the picture's top is the playfield (hud_top = 0).
 ; The first event is then the bottom border; no black event when the picture reaches BD_END.
 
+; BD_BAND (with BD_HUD and BD_TOP0): a raster band, one colour register rewritten at every line end of a run of lines
+; (a title logo's colour gradient).  The port defines BD_BAND_TOP (the band's first line: its first colour comes at
+; the line end before it), BD_BAND_N (its lines), BD_BAND_REG (the colour register's address) and fills bd_band_cols
+; (BD_BAND_N words) and bd_band_on (byte: 0 = no band this frame) before bd_hud_plan; BD_TB_VEC is the Timer B's
+; vector address (default $120).  The band is the frame's first
+; event (an early, polled one as the others: its first colour); then the Timer B counts every line and a chain of
+; small handlers (bd_band_h, BD_BAND_HS = 16 bytes each: a colour as an immediate, bd_hud_plan puts them there) writes the next line's
+; colour, the last one starting the next event.  A HOG pass may hold a line's handler back: its colour then comes
+; up to ~half a line late (in the line's left part).  The band ends BD_K + 1 lines before the bottom border at least.
+
+	ifnd BD_BAND
+BD_BAND = 0
+	endc
+	ifnd BD_TB_VEC
+BD_TB_VEC = $120			; (the Timer B's vector: the port's when it moves the MFP's vector base)
+	endc
 	ifnd BD_PALETTE
 BD_PALETTE = 0
 	endc
@@ -221,6 +237,10 @@ timer_b:
 	moveq	#0,d0
 	move.b	(a3),d0			; the counter at the line end
 	move.w	2(a3),d2
+	if BD_BAND
+	cmp.w	#28,d2
+	beq	.band
+	endc
 	cmp.w	#12,d2
 	if BD_VSWITCH
 	beq	.low
@@ -304,12 +324,52 @@ timer_b:
 	movem.l	(sp)+,d0-d7/a0-a3
 	endc
 	rte
+	if BD_BAND
+.band:	move.w	bd_band_cols,d2		; the band: its first line's colour at the line end before it, then every line
+	bd_poll
+	move.w	d2,BD_BAND_REG.w
+	clr.b	$fffffa1b.w
+	move.b	#1,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	move.l	#bd_band_h,BD_TB_VEC.w
+	move.b	1(a3),bd_band_nx	; (the event after it: the last line handler starts it)
+	bd_check_late bd_late_on
+	if BD_VSWITCH
+	movem.l	(sp)+,d0-d7/a0-a6
+	else
+	movem.l	(sp)+,d0-d7/a0-a3
+	endc
+	rte
+	endc
 .next:	clr.b	$fffffa1b.w		; the next event (none: the VBL starts the next frame's)
 	move.b	1(a3),d2
 	beq.s	.none
 	move.b	d2,$fffffa21.w
 	move.b	#8,$fffffa1b.w
 .none:	rts
+
+	if BD_BAND
+; the band's line handlers: lines 2 .. BD_BAND_N of the band (their colours: the immediates at 2 + BD_BAND_HS * k)
+BD_BAND_HS = 16				; (6 + 8 + 2 bytes: checked below)
+bd_band_h:
+BD_BI	set	1
+	rept	BD_BAND_N-2
+	dc.w	$31fc,0,BD_BAND_REG&$ffff	; (move.w #colour,BD_BAND_REG.w: kept as written)
+	move.l	#bd_band_h+BD_BAND_HS*BD_BI,BD_TB_VEC.w
+	rte
+BD_BI	set	BD_BI+1
+	endr
+	ifne	(*-bd_band_h)-(BD_BAND_N-2)*BD_BAND_HS
+	fail	"BD_BAND_HS is not the line handlers' size"
+	endc
+	dc.w	$31fc,0,BD_BAND_REG&$ffff	; (the last: the next event)
+	clr.b	$fffffa1b.w
+	move.b	bd_band_nx,$fffffa21.w
+	beq.s	.bn
+	move.b	#8,$fffffa1b.w
+.bn:	move.l	#timer_b,BD_TB_VEC.w
+	rte
+	endc
 
 ; the frame's events from hud_top / hud_bot (see the top)
 bd_hud_plan:
@@ -318,6 +378,24 @@ bd_hud_plan:
 	bsr	bd_top0_load
 	endc
 	lea	bd_lines_k,a0		; (line, kind) words, in line order
+	if BD_BAND
+	tst.b	bd_band_on
+	beq.s	.nob
+	move.w	#BD_BAND_TOP-1,(a0)+	; (the band: the first event)
+	move.w	#28,(a0)+
+	clr.b	$fffffa1b.w		; (the Timer B counts to it: not yet displayed lines, the VBL's count replaced)
+	move.b	#BD_BAND_TOP-1-BD_K,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	movem.l	a0-a1,-(sp)		; its colours into the line handlers
+	lea	bd_band_cols+2,a0
+	lea	bd_band_h+2,a1
+	moveq	#BD_BAND_N-2,d0
+.bc:	move.w	(a0)+,(a1)
+	add.w	#BD_BAND_HS,a1
+	dbf	d0,.bc
+	movem.l	(sp)+,a0-a1
+.nob:
+	endc
 	move.w	hud_top,d0
 	move.w	hud_bot,d1
 	move.w	d1,d2
@@ -330,6 +408,11 @@ bd_hud_plan:
 .split:
 	if BD_TOP0
 	moveq	#BD_ON,d0		; (the top: loaded by bd_top0_load, no event)
+	if BD_BAND
+	tst.b	bd_band_on
+	beq.s	.bot
+	move.w	#BD_BAND_TOP+BD_BAND_N-2,d0	; (the band's last line end)
+	endc
 	bra.s	.bot
 	endc
 	move.w	#BD_ON,(a0)+
@@ -385,6 +468,12 @@ bd_hud_plan:
 	sub.w	d3,d2
 	subq.w	#BD_K,d2		; this event's count
 	move.w	(a0),d3
+	if BD_BAND
+	cmp.w	#28,2(a0)
+	bne.s	.cb
+	add.w	#BD_BAND_N-1,d3		; (the band: the next counts from its last line end)
+.cb:
+	endc
 	subq.w	#BD_K,d2
 	move.b	d2,(a1)			; the counter at the line end
 	move.w	2(a0),2(a1)
@@ -753,6 +842,11 @@ bd_tb_state:	ds.b	1
 bd_ev_ptr:	ds.l	1		; (the next Timer B event)
 bd_evs:		ds.b	6*BD_EVSZ	; counter at the line end.b, next count.b, kind.w (BD_VSWITCH: 8 bytes more)
 bd_lines_k:	ds.l	6		; (bd_hud_plan: line.w, kind.w)
+	if BD_BAND
+bd_band_cols:	ds.w	BD_BAND_N	; (the port's: the band's colours, a line each)
+bd_band_on:	ds.b	1
+bd_band_nx:	ds.b	1		; (the count to the event after the band)
+	endc
 	if BD_VSWITCH
 bd_vs_pf:	ds.l	1		; the playfield: picture line 0's address.l, bytes a line.w, line width.w, fine
 bd_vs_pfs:	ds.w	1		; scroll.w

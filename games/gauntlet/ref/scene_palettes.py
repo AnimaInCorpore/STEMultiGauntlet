@@ -36,7 +36,18 @@ sys.path[:0] = [str(HERE), str(HERE.parent / "tools"), str(HERE.parents[2] / "en
 import palette_fit as PF
 
 K = 10                               # (the palettes)
+K_DOWN = 3                           # (of them for pictures with the side panel down: the title, the tables; render.s
+                                     #  picks only palettes of the picture's kind)
 OBJECT_WEIGHT = 8                    # (an object's pixel weighs as 8 others: the players and the monsters matter most)
+BAND = 15                            # (the title logo's colour band: its own colour, rewritten every line by the Timer B)
+
+
+def band_pixels(raw):
+    """the title logo's band pixels: object pen $100 + (i >> 3) * 16 + 2 + (i & 7) on line 161 + i (render.s BAND_TOP)"""
+    p = raw.astype(np.int64) - 0x100
+    i = (p >> 4) * 8 + (p & 15) - 2
+    ys = np.arange(raw.shape[0])[:, None]
+    return (p >= 0) & (p < 0x90) & ((p & 15) >= 2) & ((p & 15) <= 9) & (ys == 161 + i)
 SIG_LO, SIG_HI = 0x100, 0x300
 
 
@@ -69,6 +80,8 @@ def sample_job(seed, level, frames, first, every):
         rgb = PF.irgb_rgb(pens[raw.ravel()])
         key = (rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]
         w = np.where((raw.ravel() >= 0x100) & (raw.ravel() < 0x200), OBJECT_WEIGHT, 1)   # (the objects count more)
+        if not panel_shown(vram):                                          # (the band: shown by its own colour)
+            w = np.where(band_pixels(raw).ravel(), 0, w)
         u, inv = np.unique(key, return_inverse=True)
         c = np.bincount(inv.ravel(), weights=w)
         bar_h = {}
@@ -91,7 +104,7 @@ def main():
     import pickle
     from paths import build_dir
     jobs = [(0, 0, 14000, 300, 10)] + [(1 + (lv % 5), lv, args.frames, 800, 20) for lv in PF.LEVELS]
-    cache = build_dir("gauntlet") / ("scene_samples_%d_w%d_bar.pkl" % (args.frames, OBJECT_WEIGHT))
+    cache = build_dir("gauntlet") / ("scene_samples_%d_w%d_bar_band.pkl" % (args.frames, OBJECT_WEIGHT))
     if cache.exists():
         runs = pickle.loads(cache.read_bytes())
     else:
@@ -124,11 +137,12 @@ def main():
         return np.sqrt(((lab[:, None] - PF.oklab(np.asarray(pal))[None]) ** 2).sum(2).min(1)).astype(np.float32)
 
     def fit_of(rows):
-        """a palette for the samples rows: black, then 15 fitted colours (the status bar has a palette of its own)"""
+        """a palette for the samples rows: black, then 15 fitted colours (the status bar has a palette of its own); with
+        the side panel down (the title) 14 and colour 15 left for the logo's band (BAND, black here)"""
         h = collections.Counter(dict(zip(keys, W[rows].sum(0).tolist())))
         h = collections.Counter({k: v for k, v in h.items() if v > 0})
         panel = panels[rows].mean() > 0.5
-        n = 15
+        n = 15 if panel else 14
         fixed = np.zeros((0, 3), int)
         own = np.unique(PF.ste_snap(PF.key_rgb(list(h))), axis=0)
         own = own[own.sum(1) > 0]
@@ -137,30 +151,40 @@ def main():
             cols = both.tolist() + [[0, 0, 0]] * (n - len(both))
         else:
             cols = PF.fit(h, n, starts=8, fixed=fixed)
-        return np.array([[0, 0, 0]] + cols), panel
+        return np.array([[0, 0, 0]] + cols + [[0, 0, 0]] * (15 - n)), panel
 
     general = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)]
                         for c in json.loads((HERE.parent / "docs" / "palette.json").read_text())["colours"]])
     gen_err = W @ dist(general) / W.sum(1)
-    pals = [general]
-    print("K  1: mean error %.2f" % gen_err.mean())
+
+    def errs_of(pals, kinds):
+        """[sample, palette]: a palette of the other kind is never a sample's"""
+        e = np.stack([W @ dist(p) for p in pals], 1) / W.sum(1)[:, None]
+        e[panels[:, None] != np.array(kinds)[None, :]] = np.inf
+        return e
+
+    down = np.nonzero(~panels)[0]
+    pals, kinds = [general, fit_of(down)[0]], [True, False]                # (the seeds of either kind)
+    print("K  2: mean error %.2f" % errs_of(pals, kinds).min(1).mean())
+    rich = (W > 0).sum(1) >= 8                                            # (seeds: pictures with content)
     while len(pals) < K:
-        errs = np.stack([W @ dist(p) for p in pals], 1) / W.sum(1)[:, None]
-        rich = (W > 0).sum(1) >= 8                                        # (seeds: pictures with content)
-        worst = int(np.where(rich, errs.min(1), -1).argmax())
-        near = np.nonzero(((W > 0) == (W[worst] > 0)).all(1))[0]          # (the samples of the same colours)
+        kind = sum(1 for k in kinds if not k) >= K_DOWN                   # (the kind still short of palettes)
+        errs = errs_of(pals, kinds).min(1)
+        worst = int(np.where(rich & (panels == kind), errs, -1).argmax())
+        near = np.nonzero(((W > 0) == (W[worst] > 0)).all(1) & (panels == kind))[0]   # (the same colours)
         pals.append(fit_of(near)[0])
-        errs = np.stack([W @ dist(p) for p in pals], 1) / W.sum(1)[:, None]
+        kinds.append(kind)
+        errs = errs_of(pals, kinds)
         print("K %2d: mean error %.2f, worst sample %.2f" % (len(pals), errs.min(1).mean(), errs.min(1).max()))
     for it in range(4):                                                    # (assigned, fitted again)
-        errs = np.stack([W @ dist(p) for p in pals], 1) / W.sum(1)[:, None]
+        errs = errs_of(pals, kinds)
         a = errs.argmin(1)
         new_pals = []
         for j in range(len(pals)):
             rows = np.nonzero(a == j)[0]
             new_pals.append(fit_of(rows)[0] if len(rows) else pals[j])
         pals = new_pals
-        errs = np.stack([W @ dist(p) for p in pals], 1) / W.sum(1)[:, None]
+        errs = errs_of(pals, kinds)
         print("round %d: mean error %.2f (the general palette %.2f), worst sample %.2f" % (
             it + 1, errs.min(1).mean(), gen_err.mean(), errs.min(1).max()))
     a = errs.argmin(1)
@@ -168,7 +192,7 @@ def main():
     for j, pal in enumerate(pals):
         rows = np.nonzero(a == j)[0]
         out.append(dict(colours=PF.hexes(pal), samples=int(len(rows)),
-                        panel=bool(panels[rows].mean() > 0.5) if len(rows) else False,
+                        panel=bool(kinds[j]),
                         error=round(float(errs[rows, j].mean()), 4) if len(rows) else None,
                         error_general=round(float(gen_err[rows].mean()), 4) if len(rows) else None))
         print("palette %2d: %4d samples, error %s (general %s): %s" % (

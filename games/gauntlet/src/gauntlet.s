@@ -19,7 +19,10 @@
 	include	"map.i"			; (tools/patch.py: ARC_VRAM ... RT_BASE)
 
 ARC_IRQ4 = $34A				; the arcade's vector 28 (IRQ 4, the vertical blank)
-STARVE = 4				; (VBLs without a picture: the game paused for the renderer, see vbl)
+	ifnd STARVE
+STARVE = 4
+	endc
+					; (VBLs without a picture: the game paused for the renderer, see vbl)
 ARC_IRQ6 = $36C				; vector 30 (IRQ 6, a sound response)
 KEY_ESC = $01
 MFP_VEC = $A0				; the MFP's vector base: vectors $A0-$AF at $280-$2BF (unused by the game's ROM)
@@ -60,6 +63,16 @@ PIC_LINES = 276
 BD_PALETTE = 1				; (render.s: shown_pal, black_pal, hud_pal)
 BD_HUD = 1
 BD_VSWITCH = 1
+	ifd NOBAND
+BD_BAND = 0
+	else
+BD_BAND = 1
+	endc
+					; (the title logo's colour band: render.s band_build; it ends at line 218, before the
+BD_BAND_TOP = 162			;  bottom border's event at 229)
+BD_BAND_N = 57
+BD_BAND_REG = $ffff8240+2*15		; (render.s BAND_COL)
+BD_TB_VEC = MFP_VEC*4+8*4		; (the band's line handlers: the Timer B's vector, at $2A0 here)
 	include	"borders.s"
 
 ; arcade inputs (the words at $803000-$803006, active low)
@@ -395,17 +408,23 @@ game_resume:
 	movem.l	(sp)+,d0-d7/a0-a6
 	rte
 vbl_nested:				; the game's frame is still running: only its IRQ 4 (the CPU's frame is on its
-	tst.b	starving		; stack); the renderer starving: the game's thread paused here (its registers and
-	bne.s	preempt			; this interrupt's frame on its stack, as yield leaves them), the picture's resumed
+					; stack).  (The renderer starving does not pause the game here: that switch crashed
+					; on the STE, a corrupt frame at an RTE; the game only waits at its next frame start.)
+	move.l	d0,-(sp)		; sound replies waiting: their IRQ 6 first, as at the frame's start (a long frame
+	move.b	snd_rtail,d0		; must not hold them: the BIOS's watchdog resets the sound CPU after ~1 s without
+	cmp.b	snd_rhead,d0		; one, and the late reply then answers the next command: $FF taken as the coins);
+	beq.s	.n6			; not while the interrupted code masks IRQ 6.  (Only the game's thread pushes
+	move.w	4(sp),d0		; replies: none can come meanwhile.)
+	and.w	#$0700,d0
+	cmp.w	#$0600,d0
+	bhs.s	.n6
+	move.l	(sp)+,d0
+	move	#$2700,sr
+	move.l	#ARC_IRQ4,-(sp)
+	move.w	#$2400,-(sp)
+	bra	irq6_chain
+.n6:	move.l	(sp)+,d0
 	jmp	ARC_IRQ4
-preempt:
-	movem.l	d0-d7/a0-a6,-(sp)
-	move.l	sp,game_sp
-	sf	in_game
-	move.l	render_sp,sp
-	movem.l	(sp)+,d0-d7/a0-a6
-	rte
-
 ; IRQ 6 for each sound reply waiting (the replies, oldest first, through the game's handler), then the frame on the
 ; stack (the caller's RTE target).  Interrupts off.
 irq6_chain:
@@ -590,6 +609,9 @@ acia_isr:
 	movem.l	d0-d2/a0,-(sp)
 .again:
 	ikbd_byte
+	ifd NOKBD			; (-D NOKBD: keys ignored, for unattended Hatari runs)
+	bra	.again
+	endc
 	lea	key_table,a0
 .find:	move.b	(a0),d0
 	beq	.again

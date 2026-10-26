@@ -11,6 +11,10 @@ PIC_LINES = 276
 BD_PALETTE = 1
 BD_HUD = 1
 BD_VSWITCH = 1
+BD_BAND = 1
+BD_BAND_TOP = 162
+BD_BAND_N = 57
+BD_BAND_REG = $ffff8240+2*15
 	include	"borders.s"
 
 	section	text,code

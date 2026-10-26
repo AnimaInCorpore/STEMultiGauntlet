@@ -331,6 +331,13 @@ view_check:
 	move.w	d0,view_dx
 	lsr.w	#3,d0
 	move.w	d0,view_col
+	movem.l	d0-d7/a0-a6,-(sp)	; (the other kind of page: its palette at once, the pens it maps again dealt with
+	move.w	#SCENE_DUE,scene_due	;  before the characters are drawn again)
+	st	sc_now
+	bsr	scene_check
+	sf	sc_now
+	bsr	pal_sets
+	movem.l	(sp)+,d0-d7/a0-a6
 	bsr	al_reset
 	bsr	alpha_update
 	move.w	snap_xs,d0
@@ -379,7 +386,8 @@ vbl_video:
 .width:	move.w	d1,bd_vs_pfl
 	movem.l	flip_pal,d0-d7		; (the picture's palette: the maze's; the bar keeps its own)
 	movem.l	d0-d7,shown_pal
-.done:	rts
+	move.b	flip_band,shown_band
+.done:	bra	band_build
 
 ; ---------------------------------------------------------------------------------------------------------------------
 render_frame:
@@ -618,8 +626,16 @@ render_done:
 	lea	scene_cols,a0
 	add.w	d0,a0
 	movem.l	(a0),d0-d7
-	movem.l	d0-d7,flip_pal
-	st	frame_ready
+	tst.b	blackout		; (the arcade's palette all black: so is the picture's)
+	beq.s	.fp
+	lea	black_pal,a0
+	movem.l	(a0),d0-d7
+.fp:	movem.l	d0-d7,flip_pal
+	move.b	band_mode,flip_band
+	tst.b	blackout		; (no band on a black picture)
+	beq.s	.fb
+	sf	flip_band
+.fb:	st	frame_ready
 	rts
 
 ; ---------------------------------------------------------------------------------------------------------------------
@@ -634,11 +650,40 @@ pal_update:
 	tst.w	scene_hold
 	beq.s	.nh
 	subq.w	#1,scene_hold
-.nh:
-	lea	ARC_PALETTE+$200,a0	; (the objects' and the playfield's changes this picture: large ones noted; most of
+.nh:	tst.b	blackout		; the arcade's palette all black (between pages): the picture black at once, the
+	beq	.nbo			; colours kept until it comes back, then all taken at once (no staged fade)
+	bsr	pal_black
+	bne.s	.box
+	rts
+.box:	sf	blackout
+	sf	page_pend
+	tst.w	panel_open
+	beq.s	.bou
+	st	mo_held			; (the panel down: the objects' colours taken now, held, the band on)
+	st	mo_down
+	st	band_mode
+	bra.s	.bor
+.bou:	sf	mo_held
+	sf	mo_down
+	sf	band_mode
+.bor:	bsr	band_remap
+	clr.w	mo_still
+	lea	ARC_PALETTE,a0		; (every pen)
+	lea	pal_shadow,a1
+	move.w	#768/2,d4
+	bsr	pal_range
+	move.w	#SCENE_DUE,scene_due	; (the new page's palette at once: no threshold, no second check)
+	st	sc_now
+	bsr	scene_check
+	sf	sc_now
+	clr.w	scene_quiet
+	bra	.sets
+.nbo:	lea	ARC_PALETTE+$200,a0	; (the objects' and the playfield's changes this picture: large ones noted; most of
 	moveq	#MO_FREEZE,d5		;  the pens at once: another scene, maybe: its palette chosen in the next checks)
 	lea	mo_large,a2
 	bsr	pal_look
+	cmp.w	#MO_ARM,d0
+	shs	bo_cand			; (a large change: maybe a blackout)
 	cmp.w	#MO_FREEZE,d0		; (no large change: still, for the attract pages' objects)
 	bhs.s	.mc0
 	addq.w	#1,mo_still
@@ -655,6 +700,27 @@ pal_update:
 	lea	pf_large,a2
 	bsr	pal_look
 	cmp.w	#PF_ARM,d0
+	bhs.s	.boc
+	tst.b	bo_cand
+	beq.s	.bon
+.boc:	move.w	d0,-(sp)
+	bsr	pal_black
+	movem.w	(sp)+,d0		; (keeps the flags)
+	bne.s	.bpg
+	st	blackout		; (the colours kept as they are; black from this picture on)
+	rts
+.bpg:	tst.w	panel_open		; (the panel down: a large change is a new page, its blackout maybe missed
+	bne	.box			;  between two pictures: every colour taken now, as after a blackout)
+	move.w	#PAGE_STILL,page_wait	; (play: the colours frozen; taken whole once they stay for PAGE_STILL pictures,
+	st	page_pend		;  a flash left out: no staged change)
+	rts
+.bon:	tst.b	page_pend
+	beq.s	.bo1
+	subq.w	#1,page_wait
+	bgt.s	.bo2
+	bra	.box
+.bo2:	rts
+.bo1:	cmp.w	#PF_ARM,d0
 	blo.s	.pa
 	move.w	#SCENE_DUE,scene_due
 	clr.w	scene_quiet
@@ -673,6 +739,8 @@ pal_update:
 	cmp.w	#MO_STILL,mo_still
 	blo	.nomo
 	st	mo_held
+	st	band_mode		; (the title logo's band pens: colour BAND_COL, the Timer B's band)
+	bsr	band_remap
 	move.w	#SCENE_DUE,scene_due	; (its palette chosen now, from these colours)
 	move.w	#SCENE_QUIET,scene_quiet
 	lea	ARC_PALETTE+$200,a0
@@ -684,6 +752,8 @@ pal_update:
 	tst.b	mo_down			; (just up: all of them at once)
 	beq.s	.mu1
 	sf	mo_down
+	sf	band_mode		; (the band pens: their own colours again)
+	bsr	band_remap
 	lea	ARC_PALETTE+$200,a0
 	lea	pal_shadow+$200,a1
 	move.w	#256/2,d4
@@ -746,7 +816,9 @@ pal_update:
 	blo	.sets
 	clr.w	scene_quiet
 	bsr	scene_check
-.sets:	lea	set_mask,a4
+.sets:
+pal_sets:				; (the sets whose pens changed: dealt with)
+	lea	set_mask,a4
 	moveq	#0,d7			; the set
 .set:	move.w	(a4),d6
 	beq	.nset
@@ -881,7 +953,18 @@ pen_new:
 	st	bar_dirty
 .nb:	move.l	scene_idx_p,a3
 	move.b	(a3,d3.w),d1
-	lea	pen_map,a3
+	tst.b	band_mode		; (a band pen on the title: the band's colour)
+	beq.s	.nbd
+	move.w	d0,d5
+	sub.w	#$100,d5
+	cmp.w	#$90,d5
+	bhs.s	.nbd
+	and.w	#15,d5
+	subq.w	#2,d5
+	cmp.w	#7,d5
+	bhi.s	.nbd
+	moveq	#BAND_COL,d1
+.nbd:	lea	pen_map,a3
 	cmp.b	(a3,d0.w),d1
 	beq	.same
 	move.b	d1,(a3,d0.w)
@@ -1046,6 +1129,8 @@ scene_check:
 	move.w	scene_cur,d3		; (the current one of the other kind: change at once)
 	cmp.b	(a1,d3.w),d5
 	bne	scene_switch
+	tst.b	sc_now			; (after a blackout: the best at once)
+	bne	scene_switch
 	tst.w	scene_hold		; (changed a while ago: it stays)
 	bne.s	.none
 	move.w	scene_cur,d3		; a fifth better: best < current - current / 5 (checks run only after a scene change)
@@ -1110,7 +1195,18 @@ scene_switch:
 	moveq	#0,d0			; the pen
 .p:	move.w	(a0)+,d1
 	move.b	(a3,d1.w),d1
-	cmp.b	(a1,d0.w),d1
+	tst.b	band_mode		; (a band pen on the title: the band's colour)
+	beq.s	.pb
+	move.w	d0,d2
+	sub.w	#$100,d2
+	cmp.w	#$90,d2
+	bhs.s	.pb
+	and.w	#15,d2
+	subq.w	#2,d2
+	cmp.w	#7,d2
+	bhi.s	.pb
+	moveq	#BAND_COL,d1
+.pb:	cmp.b	(a1,d0.w),d1
 	beq.s	.n
 	move.b	d1,(a1,d0.w)
 	move.w	d0,d1
@@ -1126,6 +1222,114 @@ scene_switch:
 	blo.s	.p
 	addq.w	#1,scene_switches
 	rts
+
+; The title logo's colour band (the arcade's: a pen a line, a gradient moving through them): while the side panel is
+; down and the objects' colours are held (band_mode), the band pens ($100 + 16 s + 2..9, s 0-8: pen i =
+; s * 8 + (pen & 15) - 2 on line BD_BAND_TOP - 1 + i) are colour BAND_COL, which the title's palettes leave free
+; (ref/scene_palettes.py); the Timer B rewrites it every line of the band (borders.s BD_BAND) from the arcade's own
+; colours, taken every VBL (band_build).  The other panel-down pages do not use those pens.
+BAND_COL = 15
+
+PAGE_STILL = 2				; (play: pictures a large colour change must stay before it is taken, whole)
+
+; pal_black: Z set when the arcade's pens $000-$2FF are black but for BO_LIT at most (its blackouts leave a few
+; unused object pens and a near-black text pen lit).  Uses d0/a0.
+BO_LIT = 16
+pal_black:
+	move.l	d1,-(sp)
+	lea	ARC_PALETTE,a0
+	move.w	#768-1,d0
+	moveq	#BO_LIT,d1
+.l:	tst.w	(a0)+
+	beq.s	.z
+	subq.w	#1,d1
+	bmi.s	.lit
+.z:	dbf	d0,.l
+	move.l	(sp)+,d1
+	moveq	#0,d0			; (Z: black)
+	rts
+.lit:	move.l	(sp)+,d1
+	moveq	#1,d0
+	rts
+
+; band_remap: the band pens' colours mapped again (band_mode changed)
+band_remap:
+	movem.l	d0-d3/a0-a3,-(sp)
+	move.l	scene_idx_p,a3
+	lea	pen_rgb,a0
+	lea	pen_map,a1
+	lea	set_mask,a2
+	move.w	#$100,d0
+.p:	moveq	#15,d2
+	and.w	d0,d2
+	subq.w	#2,d2
+	cmp.w	#7,d2
+	bhi.s	.n
+	move.w	d0,d1
+	add.w	d1,d1
+	move.w	(a0,d1.w),d1
+	move.b	(a3,d1.w),d1
+	tst.b	band_mode
+	beq.s	.m
+	moveq	#BAND_COL,d1
+.m:	cmp.b	(a1,d0.w),d1
+	beq.s	.n
+	move.b	d1,(a1,d0.w)
+	move.w	d0,d2
+	lsr.w	#4,d2
+	add.w	d2,d2
+	moveq	#15,d3
+	and.w	d0,d3
+	move.w	(a2,d2.w),d1
+	bset	d3,d1
+	move.w	d1,(a2,d2.w)
+.n:	addq.w	#1,d0
+	cmp.w	#$190,d0
+	blo.s	.p
+	movem.l	(sp)+,d0-d3/a0-a3
+	rts
+
+; band_build (the VBL, the shown picture has the band): the band's line colours (bd_band_cols) from the arcade's
+; palette, as STE words (ir4s); bd_band_on.  Uses d0-d7/a0-a3.
+band_build:
+	if BD_BAND
+	tst.b	shown_band
+	sne	bd_band_on
+	beq.s	.x
+	lea	ARC_PALETTE,a0
+	lea	band_offs,a1
+	lea	ir4s,a2
+	lea	bd_band_cols,a3
+	moveq	#BD_BAND_N-1,d7
+.l:	move.w	(a1)+,d0
+	move.w	(a0,d0.w),d1		; IRGB
+	move.w	d1,d2
+	lsr.w	#8,d2			; I << 4 | R
+	moveq	#0,d3
+	move.b	(a2,d2.w),d3
+	lsl.w	#8,d3			; R
+	and.w	#$f0,d2
+	move.w	d1,d4
+	lsr.w	#4,d4
+	and.w	#15,d4
+	or.w	d2,d4
+	move.b	(a2,d4.w),d5
+	lsl.b	#4,d5			; G
+	and.w	#15,d1
+	or.w	d2,d1
+	or.b	(a2,d1.w),d5		; B
+	move.b	d5,d3
+	move.w	d3,(a3)+
+	dbf	d7,.l
+.x:
+	endc
+	rts
+band_offs:				; (line k of the band: pen i = k + 1, its word in the palette)
+BAND_I	set	1
+	rept	BD_BAND_N
+	dc.w	($100+(BAND_I>>3)*16+2+(BAND_I&7))*2
+BAND_I	set	BAND_I+1
+	endr
 
 ; set_changed: set d7 (pens 16 d7 ..) changed the pens d6.  Keeps d7/a4.
 set_changed:
@@ -4993,6 +5197,7 @@ sblit:
 	even
 bar_map:	incbin	"bar_map.bin"	; (tools/bar.py: per cell its alphanumerics word, its byte in BIMG)
 ir4:		incbin	"ir4.bin"	; [I << 4 | C]: a pen's 4-bit channel
+ir4s:		incbin	"ir4s.bin"	; (the same as an STE nibble)
 scene_cols:	incbin	"scene_cols.bin"	; SCENE_N x 16 STE colours
 scene_idx:	incbin	"scene_idx.bin"	; SCENE_N x 4096: 4-bit RGB -> the palette's colour
 scene_err:	incbin	"scene_err.bin"	; SCENE_N x 4096: its error (scene_check)
@@ -5150,6 +5355,15 @@ scene_quiet:	ds.w	1		; (the pictures since the last large colour change)
 scene_hold:	ds.w	1		; (pictures left before the palette may change again within its kind)
 mo_still:	ds.w	1		; (pictures without a large change of the objects' colours)
 mo_held:	ds.b	1		; (the panel down: the objects' colours taken, held until it comes up)
+band_mode:	ds.b	1		; (the band pens are BAND_COL)
+blackout:	ds.b	1		; (the arcade's palette all black: colours kept, the picture black)
+bo_cand:	ds.b	1
+sc_now:		ds.b	1		; (scene_check: the best palette at once)
+page_pend:	ds.b	1		; (play: a large colour change waiting to stay)
+	even
+page_wait:	ds.w	1
+flip_band:	ds.b	1		; (the published picture's band_mode)
+shown_band:	ds.b	1		; (the shown picture's)
 mo_down:	ds.b	1		; (the panel was down: the objects' colours all taken when it comes up)
 	even
 scene_idx_p:	ds.l	1

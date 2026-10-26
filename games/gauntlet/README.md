@@ -140,14 +140,26 @@ over the playfield and the bar is empty.
   and inventory rows whole at the bar's edges, the names next to them, "LEVEL n" in the middle.
 * **Colours**: per-scene palettes of 16 (`ref/scene_palettes.py`, `docs/scenes.json`, compared with the arcade and
   DawnBringer 16 in `docs/palette_compare.png`): the attract mode and play sampled, object pixels weighted x8, ten
-  palettes (black plus 15 fitted in Oklab), each flagged for pictures with the side panel up (play) or down (the
-  title and the tables).  `scene_check` scores the visible tiles, characters and objects against every palette of
+  palettes fitted in Oklab per kind: seven for pictures with the side panel up (play: black plus 15) and three for
+  it down (the title, the tables: black plus 14, colour 15 left for the title logo's band).  `scene_check` scores the visible tiles, characters and objects against every palette of
   the picture's kind and changes palette only after a large colour change, a quiet spell and two checks agreeing,
   then holds it for 256 pictures.  Every IRGB word maps to its nearest colour of the current palette; when a pen's
-  colour changes, what uses it is drawn again.  Colour cycling and fades are left out: small changes are taken only
-  for dark pens, object colours every 4th picture (heavy fades every 32nd), and while the panel is down the
-  objects' colours are taken once, when they have been still for 16 pictures, and held until the panel comes up, so
-  the title is a static picture in its full colours (no fades, no logo cycling).  The status bar has its own fixed
+  colour changes, what uses it is drawn again.  Colour cycling is left out: small changes are taken only for dark
+  pens, object colours every 4th picture (heavy changes every 32nd), and while the panel is down the objects' colours
+  are taken once, when they have been still for 16 pictures, and held until the panel comes up.  The arcade's
+  blackouts between pages (every pen but a few unused ones black for 2-30 frames) are one step each way: the
+  picture goes black at once with its colours kept, and when the palette comes back every pen is taken in that
+  picture and the new page's palette chosen at once (no staged darkening).  A blackout of 2 frames can fall between
+  two pictures, so with the panel down any large change is taken the same way (a new page); in play a large change
+  freezes the colours until it has stayed 2 pictures, then is taken whole (no staged fade-in, a short flash left
+  out).  When the panel goes up or down the palette of the other kind is chosen in that picture (`view_check`).
+* **The title logo's colour band** (the arcade's raster effect: the logo has a pen a line, lines 162-218, and the
+  game moves a gradient through those pens): on the STE the band pens are colour 15 while the title is up, and the
+  Timer B rewrites colour 15 at every line end of the band (`engine/rt/borders.s` BD_BAND: an early, polled event
+  for its first line, then a chain of 16-byte handlers with the colours as immediates), from the arcade's own band
+  colours, converted every VBL (render.s band_build); no band on a blacked-out picture.  The handlers are installed
+  in the Timer B's own vector (BD_TB_VEC: $2A0 here, where gauntlet.s moves the MFP's vectors).  A HOG Blitter pass
+  may hold a line's handler back, its colour then up to half a line late.  The status bar has its own fixed
   palette of the panel's colours (`bar_cols`, loaded by the Timer B at line 240).
 * **Centring**: while the panel is down the picture shows the arcade's x 8-327 (the title and tables centred on its
   336 pixels); in play x 0-319 (`view_check`).
@@ -156,8 +168,13 @@ over the playfield and the bar is empty.
   pixel (attract mode, play in any level with `--level`, consecutive pictures in both rings: 4,950 pictures, 0
   differ); `tools/sprite_test.py`: objects at every edge, all 16 shifts, both flips, 1-8 tiles wide, holes and
   shadows, priority, partial band lists, the transparent panel, 64 KB crossings (305 pictures, 0 differ).
-* **Scheduling**: when the renderer has made no picture for 4 VBLs, the game skips a VBL (or is preempted) so the
-  picture catches up (`gauntlet.s`, STARVE).
+* **Scheduling**: when the renderer has made no picture for 4 VBLs, the game waits a VBL at its next frame start so
+  the picture catches up (`gauntlet.s`, STARVE).  (Pausing the game's thread in the middle of a frame was taken out:
+  it crashed on the STE.)  Sound replies waiting are delivered as IRQ 6 at every VBL, also one that comes while the
+  game's frame still runs: held back through a long boot frame, a reply arrived after the BIOS's watchdog had reset
+  the sound CPU, every later reply answered the command before it, and the reset's $FF was read as the coin byte
+  (credits for all four players).  Test switches: `-D NOKBD` (keys ignored, for unattended Hatari runs), `-D NOBAND`,
+  `-D STARVE=n`.
 * **Speed** (Musashi, CPU + Blitter): 115k-390k cycles a picture in play (median by scenario), about 10-12k an
   object with its restore; the attract mode's title (about 260 fading objects, baked again each picture) is the
   slowest.  The writers' marks (2026-10-26; `render_test.py --first 1300 --frames 1600 --every 1`, 300 pictures):

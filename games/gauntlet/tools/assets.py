@@ -22,6 +22,7 @@
     scene_idx.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> the nearest of the palette's 16 in Oklab
     scene_err.bin    SCENE_N x 4096 bytes: that distance (Oklab x 400, at most 255): render.s scene_pick's score
     scenes.i         SCENE_N
+    ir4s.bin         256 bytes: ir4 as STE nibbles (the title logo's band colours, render.s band_build)
     scene_panel.bin  SCENE_N bytes: 1 when the palette was fitted to scenes with the side panel up (play), else 0
     bar_cols.bin     16 STE words: the status bar's own palette (docs/scenes.json "bar"; the Timer B loads it at line 240)
     bar_idx.bin      4096 bytes: an RGB_444 colour -> the nearest of the bar's 16
@@ -95,22 +96,25 @@ def scene_palettes():
 
 def scene_tables(dest):
     pals = scene_palettes()
+    doc = json.loads((DOCS / "scenes.json").read_text())
+    panel = [bool(p.get("panel")) for p in doc["palettes"] if p["samples"]]
     grid = np.array([[r, g, b] for r in range(16) for g in range(16) for b in range(16)]) * 17
     lab = oklab(grid)
     cols, idx, err = bytearray(), bytearray(), bytearray()
-    for pal in pals:
+    for pal, up in zip(pals, panel):
         d = np.sqrt(((lab[:, None] - oklab(pal)[None]) ** 2).sum(2))
+        if not up:
+            d[:, 15] = np.inf                                               # (the title logo's band: render.s BAND_COL)
         idx += d.argmin(1).astype(np.uint8).tobytes()
         err += np.minimum(255, np.round(d.min(1) * 400)).astype(np.uint8).tobytes()
         cols += np.array([ste_word(c) for c in pal], ">u2").tobytes()
     (dest / "ir4.bin").write_bytes(ir4())
+    (dest / "ir4s.bin").write_bytes(bytes((c >> 1) | ((c & 1) << 3) for c in ir4()))   # (as an STE nibble: the band)
     (dest / "scene_cols.bin").write_bytes(bytes(cols))
     (dest / "scene_idx.bin").write_bytes(bytes(idx))
     (dest / "scene_err.bin").write_bytes(bytes(err))
     (dest / "scenes.i").write_text("SCENE_N = %d\n" % len(pals))
-    doc = json.loads((DOCS / "scenes.json").read_text())
-    (dest / "scene_panel.bin").write_bytes(bytes(int(bool(p.get("panel"))) for p in doc["palettes"] if p["samples"]))
-    doc = json.loads((DOCS / "scenes.json").read_text())
+    (dest / "scene_panel.bin").write_bytes(bytes(int(up) for up in panel))
     bar_pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in doc["bar"]["colours"]])
     d = np.sqrt(((lab[:, None] - oklab(bar_pal)[None]) ** 2).sum(2))
     (dest / "bar_idx.bin").write_bytes(d.argmin(1).astype(np.uint8).tobytes())
