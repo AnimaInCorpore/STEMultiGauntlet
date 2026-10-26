@@ -118,6 +118,8 @@ class PortModel:
                 if self.cpu.modes[p] == M.UNMAPPED:
                     self.cpu.modes[p] = M.CALLBACK
         else:
+            from patch import widen
+            rom = bytes(widen(bytearray(rom)))      # (the original program with the wide picture's patches)
             self.mem[:0x80000] = np.frombuffer(rom, np.uint8)
             for b in range(4):
                 self.mem[BANK_COPY + b * 0x2000:BANK_COPY + (b + 1) * 0x2000] = np.frombuffer(self.banks[b], np.uint8)

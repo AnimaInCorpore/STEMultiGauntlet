@@ -2294,7 +2294,16 @@ MR_Y = 8
 MR_R0 = 10
 MR_R1 = 12
 MR_SIZE = 14
+	ifnd MO_PREP
+MO_PREP = 1				; (-D MO_PREP=0: the rows' loops, every row the strip's words)
+	endc
 MO_HASH = $3C2000			; the baked images: 2048 x (key.l, key2.l, address.l)
+	if MO_PREP
+IMG_HDR = 8+16*4			; (an image's header: rows, sw, tw, -; MO_PREP: its prepared stream per shift)
+PREP_MAX = 64*44+8			; (a stream at most: a group and a row per row, opaque and shadow)
+	else
+IMG_HDR = 8
+	endc
 MO_HASH_N = 2048
 
 mo_snapshot:
@@ -2794,7 +2803,7 @@ mo_image:
 	add.l	d4,a0
 .empty:	; room in the pool?  (an image: 8 + 8 rows + 8 sw rows bytes at most: 8 + 8 * 64 + 16 * 64)
 	move.l	mo_pool,d4
-	add.l	#8+8*64+16*64,d4
+	add.l	#IMG_HDR+8*64+16*64,d4
 	cmp.l	#SPR_POOL_END,d4
 	blo	.room
 	movem.l	d2-d3,-(sp)
@@ -2848,7 +2857,13 @@ mo_bake:
 	move.w	d1,2(a0)		; sw
 	move.w	d1,ob_sw
 	move.w	ob_tw,4(a0)
-	lea	8(a0),a3		; the opaque masks
+	if MO_PREP
+	lea	8(a0),a3		; (no stream prepared yet)
+	moveq	#16-1,d1
+.ps:	clr.l	(a3)+
+	dbf	d1,.ps
+	endc
+	lea	IMG_HDR(a0),a3		; the opaque masks
 	move.w	d0,d1
 	add.w	d1,d1
 	add.w	d1,d1
@@ -3022,10 +3037,10 @@ mo_sort:
 	sub.l	a0,d0
 	move.w	d0,6(a0)		; (the section's offset)
 	move.w	(a0),d7			; rows
-	lea	8(a0),a1		; the masks
+	lea	IMG_HDR(a0),a1		; the masks
 	move.w	d7,d0
 	lsl.w	#3,d0
-	lea	8(a0,d0.w),a2		; the data (natural order)
+	lea	IMG_HDR(a0,d0.w),a2	; the data (natural order)
 	move.w	2(a0),d6
 	lsl.w	#3,d6			; a row's bytes
 	; the opaque rows: (mask, row, data) into ob_sort, inserted in mask order (stable)
@@ -3079,6 +3094,394 @@ mo_sort:
 	rts
 	endc
 
+	if MO_PREP
+; ---------------------------------------------------------------------------------------------------------------------
+; MO_PREP (docs/sprite-preparation.md, stefastbobs2's stages 6-7 as a stream): per baked image and shift (ob_s), made
+; on first use into the pool (mo_prep), a stream of its rows, each drawn over its own destination words a .. b only:
+;   opaque groups (rows of equal first source word, X count and FXSR, in row order: the source runs on through them):
+;     count - 1.w (-1: the end), kind.w (0, 4, 8: X count 1-3), X count.w, source Y increment.w, destination Y
+;     increment.w, control word.w (BUSY HOG, FXSR, the skew), the source's offset from the data.w; then a row:
+;     END1.w [END2.w (X count 3)] [END3.w (X count 2-3)], the destination's offset from row 0.l
+;   shadow groups (P' at the same place, no skew): count - 1.w (-1: the end), kind.w, X count.w, Y increment.w; then
+;     a row: END1 [END2] [END3], P's offset from row 0's column (row * 256 + 8 a).w, the destination's offset.l
+; A row with pixels from the shifted word a > 0 reads from word a - 1 with FXSR (when s > 0); no NFSR: a read of the
+; word after the row's (the next plane's first) gives only masked bits.  The source Y increment 2 (sw - reads + 1)
+; brings the next plane's (and the next row's) first word of the group.
+
+; mo_prep: image a0's stream for the shift ob_s -> a1 (0: no room in the pool; the row loop draws it then).  Keeps
+; a0/a6.
+mo_prep:
+	movem.l	d2-d7/a2-a5,-(sp)
+	move.l	mo_pool,a1
+	move.l	a1,d0
+	add.l	#PREP_MAX,d0
+	cmp.l	#SPR_POOL_END,d0
+	bhs	.none
+	move.l	a1,-(sp)		; (the stream)
+	move.w	ob_s,d3
+	moveq	#16,d1
+	sub.w	d3,d1			; 16 - s
+	move.w	2(a0),d6		; sw
+	lea	IMG_HDR(a0),a2		; the opaque masks
+	move.w	(a0),d0
+	lsl.w	#2,d0
+	lea	(a2,d0.w),a3		; the shadow masks
+	; the opaque rows
+	clr.w	pr_row
+	clr.w	pr_doff
+	move.w	#-1,pr_key
+	clr.l	pr_hdr
+.o:	move.w	pr_row,d0
+	cmp.w	(a0),d0
+	bhs	.oe
+	lsl.w	#2,d0
+	move.l	(a2,d0.w),d0
+	beq	.on
+	bsr	pr_split		; d2 = a, d4 = b
+	moveq	#0,d5			; FXSR: a > 0 and s > 0
+	tst.w	d2
+	beq	.nf
+	tst.w	d3
+	beq	.nf
+	moveq	#1,d5
+.nf:	move.w	d2,d0			; the group's key: a - fxsr, b - a, fxsr
+	sub.w	d5,d0
+	lsl.w	#8,d0
+	move.w	d4,d7
+	sub.w	d2,d7
+	lsl.w	#4,d7
+	or.w	d7,d0
+	or.w	d5,d0
+	cmp.w	pr_key,d0
+	beq	.same
+	move.w	d0,pr_key
+	bsr	pr_close
+	move.l	a1,pr_hdr
+	clr.w	(a1)+			; (the count: pr_close)
+	move.w	d4,d0
+	sub.w	d2,d0			; X count - 1
+	move.w	d0,d7
+	lsl.w	#2,d7
+	move.w	d7,(a1)+		; kind
+	addq.w	#1,d0
+	move.w	d0,(a1)+		; X count
+	move.w	d6,d7			; source Y increment: 2 (sw - X count - fxsr + 1)
+	sub.w	d0,d7
+	sub.w	d5,d7
+	addq.w	#1,d7
+	add.w	d7,d7
+	move.w	d7,(a1)+
+	move.w	d0,d7			; destination Y increment: 2 - 8 (X count - 1)
+	subq.w	#1,d7
+	lsl.w	#3,d7
+	neg.w	d7
+	addq.w	#2,d7
+	move.w	d7,(a1)+
+	move.w	d3,d7			; the control word
+	or.w	#$c000,d7
+	tst.w	d5
+	beq	.c
+	or.w	#$0080,d7
+.c:	move.w	d7,(a1)+
+	move.w	d2,d7			; the source: the row's data + 2 (a - fxsr)
+	sub.w	d5,d7
+	add.w	d7,d7
+	add.w	pr_doff,d7
+	move.w	d7,(a1)+
+	clr.w	pr_cnt
+	bra	.row
+.same:	addq.w	#1,pr_cnt
+.row:	bsr	pr_emitw
+	bsr	pr_dst
+	move.w	d6,d0			; (the next opaque row's data)
+	lsl.w	#3,d0
+	add.w	d0,pr_doff
+.on:	addq.w	#1,pr_row
+	bra	.o
+.oe:	bsr	pr_close
+	move.w	#-1,(a1)+
+	; the shadow rows
+	clr.w	pr_row
+	move.w	#-1,pr_key
+.s:	move.w	pr_row,d0
+	cmp.w	(a0),d0
+	bhs	.se
+	lsl.w	#2,d0
+	move.l	(a3,d0.w),d0
+	beq	.sn
+	bsr	pr_split
+	move.w	d4,d0
+	sub.w	d2,d0			; the key: X count - 1
+	cmp.w	pr_key,d0
+	beq	.ss
+	move.w	d0,pr_key
+	bsr	pr_close
+	move.l	a1,pr_hdr
+	clr.w	(a1)+
+	move.w	d0,d7
+	lsl.w	#2,d7
+	move.w	d7,(a1)+		; kind
+	addq.w	#1,d0
+	move.w	d0,(a1)+		; X count
+	subq.w	#1,d0			; the Y increments: 2 - 8 (X count - 1)
+	lsl.w	#3,d0
+	neg.w	d0
+	addq.w	#2,d0
+	move.w	d0,(a1)+
+	clr.w	pr_cnt
+	bra	.sr
+.ss:	addq.w	#1,pr_cnt
+.sr:	bsr	pr_emitw
+	move.w	pr_row,d0		; P': row * 256 + 8 a
+	lsl.w	#8,d0
+	move.w	d2,d7
+	lsl.w	#3,d7
+	add.w	d7,d0
+	move.w	d0,(a1)+
+	bsr	pr_dst
+.sn:	addq.w	#1,pr_row
+	bra	.s
+.se:	bsr	pr_close
+	move.w	#-1,(a1)+
+	move.l	a1,d0			; (the pool, long-aligned)
+	addq.l	#3,d0
+	and.w	#$fffc,d0
+	move.l	d0,mo_pool
+	move.l	(sp)+,a1
+	move.w	ob_s,d0
+	lsl.w	#2,d0
+	move.l	a1,8(a0,d0.w)
+	movem.l	(sp)+,d2-d7/a2-a5
+	rts
+.none:	sub.l	a1,a1
+	movem.l	(sp)+,d2-d7/a2-a5
+	rts
+
+; pr_split: mask d0.l shifted by s (d3; d1 = 16 - s) into the words pr_w (w0 w1 w2) -> d2 = the first word with
+; pixels (a), d4 = the last (b)
+pr_split:
+	move.w	d0,d2
+	lsl.w	d1,d2
+	move.w	d2,pr_w+4
+	lsr.l	d3,d0
+	move.w	d0,pr_w+2
+	swap	d0
+	move.w	d0,pr_w
+	moveq	#0,d2
+	tst.w	pr_w
+	bne	.b
+	moveq	#1,d2
+	tst.w	pr_w+2
+	bne	.b
+	moveq	#2,d2
+.b:	moveq	#2,d4
+	tst.w	pr_w+4
+	bne	.x
+	moveq	#1,d4
+	tst.w	pr_w+2
+	bne	.x
+	moveq	#0,d4
+.x:	rts
+
+; pr_emitw: the row's end masks: w(a) [w1 when b - a = 2] [w(b) when b > a]
+pr_emitw:
+	lea	pr_w,a5
+	move.w	d2,d0
+	add.w	d0,d0
+	move.w	(a5,d0.w),(a1)+
+	move.w	d4,d0
+	sub.w	d2,d0
+	beq	.x
+	cmp.w	#2,d0
+	bne	.e3
+	move.w	2(a5),(a1)+
+.e3:	move.w	d4,d0
+	add.w	d0,d0
+	move.w	(a5,d0.w),(a1)+
+.x:	rts
+
+; pr_dst: the row's destination offset: row * STRIDE + 8 a
+pr_dst:
+	moveq	#0,d0
+	move.w	pr_row,d0
+	mulu	#STRIDE,d0
+	moveq	#0,d7
+	move.w	d2,d7
+	lsl.w	#3,d7
+	add.l	d7,d0
+	move.l	d0,(a1)+
+	rts
+
+; pr_close: the open group's count written
+pr_close:
+	tst.l	pr_hdr
+	beq	.x
+	move.l	pr_hdr,a5
+	move.w	pr_cnt,(a5)
+	clr.l	pr_hdr
+.x:	rts
+
+; mo_prep_draw: (from mo_strip_draw, the record whole into a ring) image a0's stream a1 for the shift ob_s: its opaque
+; rows, then its shadow rows (P' not wrapping in them; else mo_strip_shadow's way).  The caller saved a6.
+mo_prep_draw:
+	move.l	a0,-(sp)
+	move.w	(a0),d0
+	lsl.w	#3,d0
+	lea	IMG_HDR(a0,d0.w),a5
+	move.l	a5,d4			; the data
+	move.w	#2,BLT_SXI.w
+	move.w	#8,BLT_DXI.w
+	move.w	#$0203,BLT_HOP.w
+	move.l	ob_dest,a5
+	lea	BLT_DST.w,a2
+	lea	BLT_YC.w,a3
+	lea	BLT_CTRL.w,a4
+	lea	BLT_E1.w,a0
+	lea	BLT_E3.w,a6
+	moveq	#4,d6
+.g:	move.w	(a1)+,d5		; a group
+	bmi	.od
+	move.w	(a1)+,d0
+	move.w	(a1)+,BLT_XC.w
+	move.w	(a1)+,BLT_SYI.w
+	move.w	(a1)+,BLT_DYI.w
+	move.w	(a1)+,d7
+	moveq	#0,d1
+	move.w	(a1)+,d1
+	add.l	d4,d1
+	move.l	d1,BLT_SRC.w
+	jmp	.k(pc,d0.w)
+.k:	bra.w	.l1
+	bra.w	.l2
+	bra.w	.l3
+.l1:	move.w	(a1)+,(a0)
+	move.l	(a1)+,d0
+	add.l	a5,d0
+	move.l	d0,(a2)
+	move.w	d6,(a3)
+	move.w	d7,(a4)
+	dbf	d5,.l1
+	bra	.g
+.l2:	move.w	(a1)+,(a0)
+	move.w	(a1)+,(a6)
+	move.l	(a1)+,d0
+	add.l	a5,d0
+	move.l	d0,(a2)
+	move.w	d6,(a3)
+	move.w	d7,(a4)
+	dbf	d5,.l2
+	bra	.g
+.l3:	move.w	(a1)+,(a0)
+	move.w	(a1)+,BLT_E2.w
+	move.w	(a1)+,(a6)
+	move.l	(a1)+,d0
+	add.l	a5,d0
+	move.l	d0,(a2)
+	move.w	d6,(a3)
+	move.w	d7,(a4)
+	dbf	d5,.l3
+	bra	.g
+.od:	; the shadow rows: P' at row 0's column, when neither its columns nor its lines wrap inside the image
+	cmp.w	#-1,(a1)
+	beq	.done			; (none)
+	move.w	ob_col,d0
+	sub.w	tg_pcol,d0
+	and.w	#31,d0
+	move.w	d0,d1
+	add.w	ob_n,d1
+	cmp.w	#32,d1
+	bhi	.old
+	move.w	ob_line,d1
+	sub.w	tg_pline,d1
+	and.w	#511,d1
+	move.l	(sp),a5			; (the image: its rows)
+	move.w	d1,d2
+	add.w	(a5),d2
+	cmp.w	#512,d2
+	bhi	.old
+	moveq	#0,d4
+	move.w	d1,d4
+	lsl.l	#8,d4
+	lsl.w	#3,d0
+	add.w	d0,d4
+	add.l	#PFS,d4			; P' at row 0's column
+	move.l	ob_dest,a5
+	move.w	#8,BLT_SXI.w
+	move.w	#$c000,d7
+.sg:	move.w	(a1)+,d5
+	bmi	.done
+	move.w	(a1)+,d0
+	move.w	(a1)+,BLT_XC.w
+	move.w	(a1)+,d1
+	move.w	d1,BLT_SYI.w
+	move.w	d1,BLT_DYI.w
+	jmp	.sk(pc,d0.w)
+.sk:	bra.w	.s1
+	bra.w	.s2
+	bra.w	.s3
+.s1:	move.w	(a1)+,(a0)
+	moveq	#0,d1
+	move.w	(a1)+,d1
+	add.l	d4,d1
+	move.l	d1,BLT_SRC.w
+	move.l	(a1)+,d0
+	add.l	a5,d0
+	move.l	d0,(a2)
+	move.w	d6,(a3)
+	move.w	d7,(a4)
+	dbf	d5,.s1
+	bra	.sg
+.s2:	move.w	(a1)+,(a0)
+	move.w	(a1)+,(a6)
+	moveq	#0,d1
+	move.w	(a1)+,d1
+	add.l	d4,d1
+	move.l	d1,BLT_SRC.w
+	move.l	(a1)+,d0
+	add.l	a5,d0
+	move.l	d0,(a2)
+	move.w	d6,(a3)
+	move.w	d7,(a4)
+	dbf	d5,.s2
+	bra	.sg
+.s3:	move.w	(a1)+,(a0)
+	move.w	(a1)+,BLT_E2.w
+	move.w	(a1)+,(a6)
+	moveq	#0,d1
+	move.w	(a1)+,d1
+	add.l	d4,d1
+	move.l	d1,BLT_SRC.w
+	move.l	(a1)+,d0
+	add.l	a5,d0
+	move.l	d0,(a2)
+	move.w	d6,(a3)
+	move.w	d7,(a4)
+	dbf	d5,.s3
+	bra	.sg
+.done:	move.l	(sp)+,a0
+	rts
+.old:	; (P' wraps inside the image: mo_strip_shadow's passes, its registers as mo_strip_draw leaves them)
+	move.l	(sp)+,a0
+	move.l	4(sp),a6		; (the record: the caller's saved a6)
+	move.w	ob_n,d0
+	move.w	d0,BLT_XC.w
+	subq.w	#1,d0
+	lsl.w	#3,d0
+	moveq	#2,d1
+	sub.w	d0,d1
+	move.w	d1,BLT_DYI.w
+	move.w	#2,BLT_SXI.w
+	moveq	#0,d5
+	move.w	tg_stride,d5
+	move.w	ob_s,d3
+	moveq	#16,d1
+	sub.w	d3,d1
+	lea	BLT_DST.w,a2
+	lea	BLT_YC.w,a3
+	lea	BLT_CTRL.w,a4
+	bra	mo_strip_shadow
+	endc
+
 ; mo_strip_draw: image a0 (record a6's rows MR_R0 .. MR_R1) at the target's pixel d4.w, line d5.w: a HOG pass a row
 ; (Y count 4: the planes; X count 1-3 words; END1-END3 the row's opaque mask shifted, written when it changes; the
 ; source runs on), then the shadow rows: P' at the same place, through the shadow mask
@@ -3123,12 +3526,31 @@ mo_strip_draw:
 	add.l	d2,d1
 	add.l	work_base,d1
 	move.l	d1,ob_dest
+	if MO_PREP
+	tst.w	d6			; (whole, into a ring: the stream of its shift)
+	bne	.noprep
+	move.w	(a0),d0
+	subq.w	#1,d0
+	cmp.w	d7,d0
+	bne	.noprep
+	cmp.w	#STRIDE,tg_stride
+	bne	.noprep
+	move.w	ob_s,d0
+	lsl.w	#2,d0
+	move.l	8(a0,d0.w),a1
+	move.l	a1,d0
+	bne	mo_prep_draw
+	bsr	mo_prep
+	move.l	a1,d0
+	bne	mo_prep_draw
+.noprep:
+	endc
 	; the source: the opaque rows before r0 skipped
 	move.w	(a0),d2			; rows
-	lea	8(a0),a1		; the opaque masks
+	lea	IMG_HDR(a0),a1		; the opaque masks
 	move.w	d2,d1
 	lsl.w	#3,d1
-	lea	8(a0,d1.w),a2		; the data
+	lea	IMG_HDR(a0,d1.w),a2	; the data
 	move.w	2(a0),d1
 	lsl.w	#3,d1			; 8 sw: a row's bytes
 	move.w	d1,ob_rowb
@@ -3242,7 +3664,7 @@ mo_strip_shadow:
 	; the shadow rows: source P' (its line (line - tg_pline) & 511, column (col - tg_pcol) & 31), no skew
 	move.w	(a0),d0
 	lsl.w	#2,d0
-	lea	8(a0,d0.w),a1		; the shadow masks
+	lea	IMG_HDR(a0,d0.w),a1	; the shadow masks
 	move.w	MR_R0(a6),d6
 	move.w	MR_R1(a6),d7
 	move.w	d6,d0
@@ -3513,6 +3935,7 @@ shadow_fast:
 	move.w	BLT_DYI.w,BLT_SYI.w	; (2 - (n - 1) 8: the next plane)
 	clr.b	BLT_SKEW.w
 	moveq	#-1,d4
+	ifnd SH_NARROW				; (every row the strip's n words)
 	move.w	ob_n,d0
 	cmp.w	#2,d0
 	blo	.one
@@ -3520,6 +3943,73 @@ shadow_fast:
 	SHROW	3
 .two:	SHROW	2
 .one:	SHROW	1
+	else
+	; -D SH_NARROW=1: each row only its own words a .. b of the n (of the shifted mask w0 w1 w2): the source and
+	; destination 8 a further (d6), X count b - a + 1 with its increments (written when it changes); the masks w(a) ..
+	; w(b).  Measured slower (README): the words found again at every mask change cost more CPU than the Blitter saves
+	moveq	#0,d6
+.r:	move.l	(a1)+,d0
+	beq	.n
+	cmp.l	d0,d4
+	beq	.g
+	move.l	d0,d4
+	move.w	d0,d2
+	lsl.w	d1,d2			; w2
+	lsr.l	d3,d0			; w0:w1
+	swap	d0			; (w0 in the low word)
+	tst.w	d0
+	beq	.a1
+	moveq	#0,d6			; a = 0
+	move.w	d0,BLT_E1.w
+	tst.w	d2
+	bne	.x3
+	swap	d0
+	tst.w	d0
+	beq	.x1
+	move.w	d0,BLT_E3.w		; b = 1
+	bra	.x2
+.x3:	swap	d0			; b = 2: three words
+	move.w	d0,BLT_E2.w
+	move.w	d2,BLT_E3.w
+	moveq	#3,d0
+	moveq	#-14,d2
+	bra	.xc
+.a1:	swap	d0			; (w1)
+	tst.w	d0
+	beq	.a2
+	moveq	#8,d6			; a = 1
+	move.w	d0,BLT_E1.w
+	tst.w	d2
+	beq	.x1
+	move.w	d2,BLT_E3.w
+.x2:	moveq	#2,d0
+	moveq	#-6,d2
+	bra	.xc
+.a2:	moveq	#16,d6			; a = 2
+	move.w	d2,BLT_E1.w
+.x1:	moveq	#1,d0
+	moveq	#2,d2
+.xc:	cmp.w	BLT_XC.w,d0
+	beq	.g
+	move.w	d0,BLT_XC.w
+	move.w	d2,BLT_SYI.w
+	move.w	d2,BLT_DYI.w
+.g:	move.l	a0,d0
+	add.l	d6,d0
+	move.l	d0,BLT_SRC.w
+	move.l	a5,d0
+	add.l	d6,d0
+	move.l	d0,(a2)
+	move.w	#4,(a3)
+	move.w	#$c000,(a4)
+.n:	add.l	d5,a5
+	lea	256(a0),a0
+	cmp.l	a6,a0
+	blo	.w
+	sub.l	#512*256,a0
+.w:	dbf	d7,.r
+	rts
+	endc
 
 ; sblit: a shifted copy of sb_w pixels x sb_lines lines from sb_src (pixel sb_spx of its first line, sb_sstride bytes a
 ; line) to sb_dst (pixel sb_dpx, sb_dstride), four interleaved planes: a pass per plane
@@ -3711,6 +4201,15 @@ ob_line:	ds.w	1
 ob_col:		ds.w	1
 ob_rowb:	ds.w	1
 ob_em:		ds.w	3
+	if MO_PREP
+pr_w:		ds.w	3
+pr_row:		ds.w	1
+pr_doff:	ds.w	1
+pr_key:		ds.w	1
+pr_cnt:		ds.w	1
+	even
+pr_hdr:		ds.l	1
+	endc
 sb_sstride:	ds.w	1
 sb_spx:		ds.w	1
 sb_dstride:	ds.w	1

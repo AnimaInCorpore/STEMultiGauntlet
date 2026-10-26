@@ -8,7 +8,14 @@ STEGauntlet: the arcade's Gauntlet on the STE, aimed at fast play and, later, ne
 scrolled as before; the side panel is gone from the picture and its cells (scores, health, inventory, names, level)
 are laid out again in a status bar in lines 240-275 (`tools/bar.py`), a static image of its own that the Timer B
 switches the display to (the video counter and the palette reloaded at its first line: `engine/rt/borders.s`
-BD_HUD / BD_VSWITCH, PIC_TOP 0).  `-D SHOWFPS=1`: the picture rate of the last second in the bar's middle.  Hatari
+BD_HUD / BD_VSWITCH, PIC_TOP 0).  `-D SHOWFPS=1`: the picture rate of the last second in the bar's middle.  Objects and their shadows are drawn from
+prepared streams per baked strip and shift (`MO_PREP`, each row only over its own words: the ghost horde 803k ->
+658k cycles a picture, light play 4-14% less over 900 pictures; `docs/sprite-preparation.md`).  The game's own idea of the screen is widened to
+match (`tools/patch.py` WIDE, 24 places): it kept players inside x < 216 of the old 224-pixel maze area, released
+monsters beyond it, woke generators and aimed the magic only there, and centred the camera at x 104 with its right
+limit for a non-wrapping maze at the old area's edge; now the bounds are 88 pixels wider, the camera centres the
+players at x 152 and stops with the right wall at the picture's edge.  `tools/logic_test.py` runs the original program
+with the same patches (equal VBL for VBL, 8000 VBLs, seeds 3 and 12).  Hatari
 (attract mode's demo play): 27 pictures a second, 20 with a message box; a ghost horde now on screen (it was under
 the panel) costs ~800k cycles a picture (was ~470k).
 
@@ -22,8 +29,9 @@ speech.  Needs a 4 MB STE and the whole machine: the program takes TOS's memory,
 no return to the desktop and no CRASH.TXT; a crash turns the screen red and keeps its record at $3C1000).
 
 ```sh
-python games/gauntlet/tools/prepare.py       # verify assets/roms/gauntlet.zip, unpack to assets/roms/extracted/gauntlet/
-python port.py cover gauntlet                # the coverage the patcher starts from (~10 minutes)
+python games/gauntlet/tools/prepare.py       # verify assets/gauntlet.zip, unpack to assets/extracted/gauntlet/
+python games/gauntlet/ref/cover.py -1 420      # the coverage the patcher starts from: the BIOS's boot, then
+for s in 0 1 2 3 4 11 12 13 14 15; do python games/gauntlet/ref/cover.py $s 15000; done   # attract, 1-4 players
 python games/gauntlet/tools/build.py         # run/gauntlet/GAUNTLET.PRG (--sim: run/gauntlet_sim/ for the tests)
 python games/gauntlet/tools/logic_test.py 8000 --seed 12 [--level 9]   # the patched program against the original
 python games/gauntlet/tools/render_test.py --seed 1 [--level 7]   # the pictures against the reference renderer
@@ -36,7 +44,7 @@ python games/gauntlet/ref/mame_cmp_gauntlet.py [frame ...] [--keep DIR]   # the 
 python games/gauntlet/ref/trace_cmp.py main|sound F0 F1 [--keep DIR]   # one CPU against MAME's trace
 ```
 
-Supply `assets/roms/gauntlet.zip`: the 20 files of MAME's `gauntlet` under MAME's names (`docs/rom_manifest.json`
+Supply `assets/gauntlet.zip`: the 20 files of MAME's `gauntlet` under MAME's names (`docs/rom_manifest.json`
 has their sizes, CRCs and SHA-1s).  All match MAME 0.289 but `136037-104.6p`, the alphanumerics: the archive has the
 8 KB dump of the 27128, MAME lists the whole chip (16 KB, the second half $00, crc32 6c276a1d), so
 `tools/mame_roms.py` writes MAME a copy padded with zeros.  Nothing ROM-derived is in git: the patched program, the

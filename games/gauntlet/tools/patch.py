@@ -109,6 +109,51 @@ HOOK_SIZE = 16
 # not empty yet: wait for the next frame, then call $4802 again; else on at $40F8A)
 SCHEDULE = [(0x40C28, 0x60F8, 0x4E4E), (0x40F88, 0x66F6, 0x4E4D)]
 
+# The wide picture (STEGauntlet: the maze over 320 pixels, the arcade's x 0-319, where the arcade showed 224 of
+# them, x 8-231, beside its side panel): the game's own idea of the screen widened by 88 pixels, so players walk,
+# monsters stay alive, generators and the magic act over what is shown, and the camera centres in it.
+# (address, original bytes, new bytes, what): positions are the arcade's x * 128 relative to (x scroll - 8) * 128
+# ($904A6C); 224 pixels = $7000, 312 = $9C00, 232 = $7400, 320 = $A000.  The y bounds stay (240 lines, as shown).
+WIDE = [
+    (0x092BA, "0c407000", "0c409c00", "a player moving right: within the screen (x < 224 -> 312)"),
+    (0x0941C, "0c407000", "0c409c00", "a player moving left: the same bound"),
+    (0x095A8, "0c407000", "0c409c00", "a player moving right (diagonal)"),
+    (0x095F2, "0c407000", "0c409c00", "a player moving left (diagonal)"),
+    (0x0970C, "0c407000", "0c409c00", "a player moving (the other test)"),
+    (0x09740, "0c407000", "0c409c00", "a player moving (not in the coverage)"),
+    (0x45C68, "0c457400", "0c45a000", "a monster released when off screen (x 232 -> 320)"),
+    (0x46B66, "0c407000", "0c409c00", "a maze cell (generator, trap) active on screen"),
+    (0x4DAE6, "0c407000", "0c409c00", "the magic: the cells on screen (not in the coverage)"),
+    (0x4DC16, "0c407000", "0c409c00", "the magic (not in the coverage)"),
+    (0x4DE00, "0c407000", "0c409c00", "the magic (not in the coverage)"),
+    (0x4DFB6, "0c407000", "0c409c00", "the magic: the monsters on screen (not in the coverage)"),
+    (0x4DD72, "7068d1aefffc", "066e0098fffe", "the magic's centre: x scroll + 104 -> + 152 (addi.w to the long's low "
+                                               "word: no carry, the scroll < 512)"),
+    (0x45172, "04430098", "04430068", "the camera: the players' unwrap window, centre - 256 (152 -> 104 before it)"),
+    (0x45318, "064400e0", "06440138", "the camera: every player inside the new view (224 -> 312 wide)"),
+    (0x453E6, "064400e0", "06440138", "the camera (the other branch)"),
+    (0x45336, "048100000090", "048100000064", "the camera: that box's unwrap margin (512 - 224) / 2 -> (512 - 312) / 2"),
+    (0x4534E, "068100000090", "068100000064", "the camera: the same, the other side"),
+    (0x45414, "048100000090", "048100000064", "the camera (the other branch)"),
+    (0x4542C, "068100000090", "068100000064", "the camera (the other branch)"),
+    (0x4556C, "04410068", "04410098", "the camera: the scroll = the players' centre - 104 -> - 152 (centred in 320)"),
+    (0x4511A, "598170689280", "0441009c4e71", "the camera at a level's start: x - 4 - 104 -> x - 156 (the callee "
+                                               "reads the low word only)"),
+    (0x454F2, "0c410124", "0c4100cc", "the camera: the scroll's right limit (a maze that does not wrap) 292 -> 204: "
+                                       "its right wall at the picture's right edge, as at the arcade's x 231"),
+    (0x454F8, "323c0124", "323c00cc", "the camera: the same limit"),
+]
+
+
+def widen(rom):
+    """the WIDE patches applied to a program image (bytearray, the arcade's addresses)"""
+    for a, old, new, _ in WIDE:
+        old, new = bytes.fromhex(old), bytes.fromhex(new)
+        assert len(old) == len(new) and bytes(rom[a:a + len(old)]) == old, "WIDE %06X: not %s" % (a, old.hex())
+        rom[a:a + len(new)] = new
+    return rom
+
+
 # long values in window ranges that are numbers, not addresses: (arcade pc of the instruction)
 NOT_POINTERS = {0x3202, 0x32CC}           # movea.l #$800002,a0: the alphanumerics' row and column steps ($80 by
                                           # swap, 2 by adda.w; $324E), not the work RAM
@@ -259,6 +304,7 @@ def build(report=False):
         op = 0x4EF9 if name.startswith("slap") else 0x4EB9          # (the slapstic's routines: replaced whole)
         words = [op, (RT_STUBS + 6 * k) >> 16, (RT_STUBS + 6 * k) & 0xFFFF] + [0x4E71] * ((n - 6) // 2)
         rom[pc:pc + n] = b"".join(struct.pack(">H", w) for w in words)
+    widen(rom)                                         # (the wide picture's game: WIDE)
     out = build_dir("gauntlet")
     hooks = []
     for k, (pc, n) in enumerate(HOOKS):
