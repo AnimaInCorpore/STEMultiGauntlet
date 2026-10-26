@@ -49,14 +49,16 @@ JP_COIN1 = $01<<JP_SHX
 JP_COIN2 = $02<<JP_SHX
 	include	"jagpad.s"
 
-; the borders (engine/rt/borders.s): 240 lines from the 18th displayed one, the palette black outside them
-	ifnd PIC_TOP
-PIC_TOP = 18
-	endc
+; the borders (engine/rt/borders.s): open at the top and the bottom, all 276 displayed lines (stefastbobs2's
+; screen): the maze from the first (PIC_TOP 0: the VBL loads its address), the status bar from line 240 (BD_HUD +
+; BD_VSWITCH: the Timer B switches the video address and the palette there; render.s BIMG)
+PIC_TOP = 0
 TA_DATA = 98
 TA_NOPS = 84
-PIC_LINES = 240
-BD_PALETTE = 1				; (render.s: shown_pal, black_pal)
+PIC_LINES = 276
+BD_PALETTE = 1				; (render.s: shown_pal, black_pal, hud_pal)
+BD_HUD = 1
+BD_VSWITCH = 1
 	include	"borders.s"
 
 ; arcade inputs (the words at $803000-$803006, active low)
@@ -325,6 +327,17 @@ vbl:
 	lea	vbl_stack_top,sp	; little room below the program's variables)
 	movem.l	d0-d7/a0-a6,-(sp)
 	addq.l	#1,vbl_count
+	ifd SHOWFPS				; (the pictures of the last 50 VBLs: render.s shows them in the status bar)
+	subq.b	#1,fps_phase
+	bpl.s	.fp
+	move.b	#49,fps_phase
+	move.l	pictures,d0
+	move.l	d0,d1
+	sub.l	fps_last,d0
+	move.l	d1,fps_last
+	move.w	d0,fps_value
+.fp:
+	endc
 	ifnd TICK50
 	subq.b	#1,tick_phase		; the arcade's 60 Hz: a sixth tick every fifth VBL, given when the game waits
 	bpl.s	.ph
@@ -335,6 +348,9 @@ vbl:
 .ph:
 	endc
 	bsr	vbl_video
+	ifnd SIM
+	bsr	bd_hud_plan		; (the picture's address and the Timer B's events for this frame)
+	endc
 	bsr	vbl_inputs
 	bsr	snd_out_vbl
 	movem.l	(sp)+,d0-d7/a0-a6
@@ -680,6 +696,12 @@ vbl_count:	ds.l	1
 frames_done:	ds.l	1
 frames_drawn:	ds.l	1
 pictures:	ds.l	1
+	ifd SHOWFPS
+fps_last:	ds.l	1
+fps_value:	ds.w	1
+fps_phase:	ds.b	1
+	even
+	endc
 extra_ticks:	ds.l	1		; (the sixth ticks given)
 tick_phase:	ds.b	1
 extra_tick:	ds.b	1

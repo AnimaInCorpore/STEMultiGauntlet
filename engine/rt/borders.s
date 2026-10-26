@@ -46,6 +46,12 @@
 ; middle byte again, the counter's three), the fine scroll and the line width right after the line end, before the
 ; palette: ~60 cycles, all done within the horizontal blank.  The port only switches when the plan keeps the bars'
 ; lines exact (no event moved).
+;
+; PIC_TOP = 0 with BD_HUD (BD_TOP0): the picture starts at the first displayed line, the full height of the open
+; borders (BD_END lines: stefastbobs2's screen).  No event can come before that line, so bd_hud_plan (in the VBL,
+; before the display starts) loads the palette (shown_pal) and, with BD_VSWITCH and bd_vs_on, the playfield's video
+; address (base and counter), fine scroll and line width itself; the picture's top is the playfield (hud_top = 0).
+; The first event is then the bottom border; no black event when the picture reaches BD_END.
 
 	ifnd BD_PALETTE
 BD_PALETTE = 0
@@ -65,10 +71,17 @@ BD_EVSZ = 4
 BD_K = 2				; Timer B events fire this many lines early
 BD_POLL = 120				; poll limit (~4 lines; only a missing line would reach it)
 BD_LOW = 229				; the line end after which the bottom border is opened
+BD_END = 276				; the displayed lines with both borders open (29 + 200 + 47)
+BD_TOP0	set	0
 	if BD_PALETTE
 BD_ON = PIC_TOP				; the line end after which the palette comes on
 BD_OFF = PIC_TOP+PIC_LINES		; and goes off
+	if BD_HUD&(PIC_TOP=0)
+BD_TOP0	set	1				; (the VBL loads the picture's top: see above)
+BD_FIRST = BD_LOW
+	else
 BD_FIRST = BD_ON
+	endc
 	if BD_HUD
 	if BD_VSWITCH
 BD_SAVED = 60				; (Timer B's saved registers)
@@ -301,6 +314,9 @@ timer_b:
 ; the frame's events from hud_top / hud_bot (see the top)
 bd_hud_plan:
 	movem.l	d0-d4/a0-a1,-(sp)
+	if BD_TOP0
+	bsr	bd_top0_load
+	endc
 	lea	bd_lines_k,a0		; (line, kind) words, in line order
 	move.w	hud_top,d0
 	move.w	hud_bot,d1
@@ -311,7 +327,12 @@ bd_hud_plan:
 	move.w	#BD_ON,(a0)+		; (no playfield lines between the bars: all hud_pal)
 	move.w	#4,(a0)+
 	bra.s	.low
-.split:	move.w	#BD_ON,(a0)+
+.split:
+	if BD_TOP0
+	moveq	#BD_ON,d0		; (the top: loaded by bd_top0_load, no event)
+	bra.s	.bot
+	endc
+	move.w	#BD_ON,(a0)+
 	tst.w	d0
 	beq.s	.notop
 	move.w	#4,(a0)+
@@ -349,8 +370,11 @@ bd_hud_plan:
 	bra.s	.off
 .low:	move.w	#BD_LOW,(a0)+
 	move.w	#12,(a0)+
-.off:	move.w	#BD_OFF,(a0)+
+.off:
+	if BD_OFF<BD_END
+	move.w	#BD_OFF,(a0)+
 	move.w	#8,(a0)+
+	endc
 	; the counts: an event's Timer B count is its distance to the one before less BD_K (the first: from line 0,
 	; borders_vbl's BD_FIRST - BD_K); the counter reads that less BD_K at the event's line end
 	move.l	a0,d4
@@ -478,6 +502,9 @@ timer_b:
 	movem.l	(sp)+,d0-d2/a0
 	endc
 	rte
+	endc
+	if BD_TOP0
+	bd_top0_macro
 	endc
 	endm
 
@@ -758,4 +785,33 @@ bd_pc_n:	ds.w	1
 bd_pcs:	ds.l	64
 	endc
 	endc
+	endm
+
+; bd_top0_load (BD_TOP0, from bd_hud_plan in the VBL): the picture's first line is the playfield's, its palette
+; shown_pal; with BD_VSWITCH and bd_vs_on its video address (the base and the counter: the STE's is writable, and the
+; display has not started), fine scroll and line width.
+bd_top0_macro	macro
+bd_top0_load:
+	movem.l	d0-d7/a0,-(sp)
+	movem.l	shown_pal,d0-d7
+	movem.l	d0-d7,$ffff8240.w
+	if BD_VSWITCH
+	tst.b	bd_vs_on
+	beq.s	.x
+	move.l	bd_vs_pf,d0
+	move.l	d0,-(sp)
+	lea	(sp),a0
+	move.b	1(a0),$ffff8201.w
+	move.b	2(a0),$ffff8203.w
+	move.b	3(a0),$ffff820d.w
+	move.b	1(a0),$ffff8205.w
+	move.b	2(a0),$ffff8207.w
+	move.b	3(a0),$ffff8209.w
+	addq.l	#4,sp
+	move.b	bd_vs_pfh+1,$ffff8265.w
+	move.b	bd_vs_pfl+1,$ffff820f.w
+.x:
+	endc
+	movem.l	(sp)+,d0-d7/a0
+	rts
 	endm

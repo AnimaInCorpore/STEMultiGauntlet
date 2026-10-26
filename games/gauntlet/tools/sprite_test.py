@@ -5,15 +5,15 @@ through the fixed palette, pixel for pixel: objects placed by the test in a real
 
 Cases (consecutive pictures, the two rings in turn, so every picture also restores the damage of the one before
 last):
-  edges   objects swept over the maze's left edge (the display window's: whole into the hidden margin), its right edge
-          (the panel's: whole, the panel drawn over them), the top and bottom (whole into the guard lines), at every x
+  edges   objects swept over the picture's left edge (the display window's: whole into the hidden margin), its right
+          edge (whole into the ring beyond the display window), the top and bottom (whole into the guard lines), at every x
           and with the fine scroll stepped, so all 16 shifts of 1-4 tile wide strips and both flips are drawn;
   wide    5-8 tiles wide objects (two strips) and 1 x 1 ones;
   holes   objects with transparent holes and shadow pixels (pen 1: the playfield's shadow colour from P') over each
           other (later over earlier, a shadow over an earlier object shows the playfield's shadow);
   bands   a band list that starts after an object (MAME draws it only in the bands whose lists hold it) and lists that
           merge in a tree (the general way);
-  panel   the panel's characters transparent (the title's and the high scores' way): objects at the arcade's x 240-335;
+  panel   the panel's characters transparent (the title's and the high scores' way): objects at the arcade's x 232-319;
   64k     the ring's 64 KB boundaries: the scroll set so that objects straddle them (checked: the test fails when no
           drawn row crossed one).
 """

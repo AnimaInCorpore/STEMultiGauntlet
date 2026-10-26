@@ -14,6 +14,8 @@
     nz4.bin          256 bytes: per byte of four 2-bit pixels, the pixels not 0 (bit 3 the first)
     bitrev.bin       256 bytes: a byte's bits reversed (a mirrored mask)
     sprite_code.s    the motion objects' draw routine (render.s includes it)
+    bar_map.bin      the status bar's cells (tools/bar.py): their word in the alphanumerics, their byte in the bar
+    bar.i            BAR_N (the cells), BAR_LINES
 """
 from pathlib import Path
 import json
@@ -95,11 +97,25 @@ def build():
                                          for b in range(256)))
     (dest / "bitrev.bin").write_bytes(bytes(int("{:08b}".format(b)[::-1], 2) for b in range(256)))
     (dest / "sprite_code.s").write_text(sprite_code())
+    import bar
+    (dest / "bar_map.bin").write_bytes(bar.table())
+    (dest / "bar.i").write_text("BAR_N = %d\nBAR_LINES = %d\n" % (len(bar.cells()), bar.BAR_LINES))
     print("renderer assets: %s" % dest, flush=True)
 
 
+PANEL_COLS = range(29, 40)          # (the arcade's columns 29-39: the STE's x 232-319; render.s panel_open)
+
+
+def panel_shown(vram):
+    """the side panel is up (its characters all opaque, rows 0-29): it goes to the status bar, the playfield shows
+    under its place"""
+    d = np.frombuffer(bytes(vram[0x5000:0x5000 + 64 * 31 * 2]), ">u2").reshape(31, 64)
+    return bool((d[:30, PANEL_COLS.start:PANEL_COLS.stop] & 0x8000).all())
+
+
 class Oracle:
-    """the reference picture through the fixed palette: [240, 320] colour indices (the arcade's x 8-231 and 240-335)"""
+    """the reference picture through the fixed palette: [240, 320] colour indices (the arcade's x 0-319; while the
+    panel is up, no alphanumerics right of the maze: x 232-), and the status bar ([BAR_LINES, 320])"""
 
     def __init__(self):
         from video import Video
@@ -117,9 +133,29 @@ class Oracle:
 
     def picture_raw(self, vram, palette, xscroll):
         vram = bytes(vram)
-        raw = self.video.render_raw(vram, xscroll, (vram[0x5F6E] << 8) | vram[0x5F6F])
-        idx = self.indices(raw, palette)
-        return np.hstack((idx[:, 8:232], idx[:, 240:336]))
+        ys = (vram[0x5F6E] << 8) | vram[0x5F6F]
+        if panel_shown(vram):
+            alpha = self.video.alpha
+            self.video.alpha = lambda v: (lambda p: (p[0], np.where(np.arange(p[1].shape[1]) < 232, p[1], False)))(
+                alpha(v))
+            try:
+                raw = self.video.render_raw(vram, xscroll, ys)
+            finally:
+                self.video.alpha = alpha
+        else:
+            raw = self.video.render_raw(vram, xscroll, ys)
+        return self.indices(raw, palette)[:, :320]
+
+    def bar(self, vram, palette):
+        import bar
+        out = np.zeros((bar.BAR_LINES, 320), np.uint8)
+        if not panel_shown(vram):
+            return out
+        apix, _ = self.video.alpha(bytes(vram))
+        idx = self.indices(apix, palette)
+        for y, k, r, c in bar.cells():
+            out[y:y + 8, 8 * k:8 * k + 8] = idx[8 * r:8 * r + 8, 8 * c:8 * c + 8]
+        return out
 
 
 if __name__ == "__main__":

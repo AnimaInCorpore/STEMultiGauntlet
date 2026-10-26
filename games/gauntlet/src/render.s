@@ -1,8 +1,13 @@
 ; Gauntlet's picture on the STE: a hardware-scrolled ring of the playfield torus (the Shifter's address, $ffff8265 for
-; the fine scroll), the motion objects by the Blitter, the alphanumerics (the side panel, messages) on top.
+; the fine scroll), the motion objects by the Blitter, the alphanumerics (messages) on top; the side panel in a status
+; bar below the maze.
 ;
-; The layout: the maze is the arcade's x 8-231 at the STE's 0-223 (14 words), the panel (alphanumerics columns 30-41,
-; the arcade's x 240-335) at 224-319; all 240 lines.
+; The layout (the borders open: 276 lines, engine/rt/borders.s with PIC_TOP 0): the maze over the whole width, the
+; arcade's x 0-319 at the STE's 0-319 (the alphanumerics' columns 0-39 at the STE's characters 0-39), lines 0-239;
+; the status bar in lines 240-275 from its own image (BIMG, tools/bar.py: the side panel's cells laid out again), the
+; Timer B switching the video address there.  While the side panel is up (its characters, the arcade's columns 29-39,
+; all opaque: panel_open = 0) the alphanumerics right of the maze (characters 29-39) are not drawn over the playfield
+; and the panel goes to the bar; else (the title, the high scores) they are, and the bar is empty.
 ;
 ; The playfield bitmap P (PFB): the 512 x 512 torus in STE planes (32 words x 512 lines), every tile drawn with the
 ; fixed palette; P' (PFS) the same in the shadow colours (pens $200-$27F: what a motion object's pen 1 shows).  A tile
@@ -14,7 +19,7 @@
 ; shows P's column (c - MCOL) & 31, ring line l P's line (l - GUARD) & 511: every ring position shows a fixed place of
 ; the torus, so the ring needs no redrawing when the window moves, only where it was never filled (each ring keeps a
 ; valid rectangle that grows with the window) or damaged.  The picture's pixel (x, y) is ring pixel 16 w0 + f + x of
-; line T + y: w0 = MCOL + (sx >> 4), f = sx & 15, T = GUARD + sy (sx = (x scroll + 8) & 511, sy = y scroll); the
+; line T + y: w0 = MCOL + (sx >> 4), f = sx & 15, T = GUARD + sy (sx = x scroll & 511, sy = y scroll); the
 ; display window starts at word w0 (21 words fetched with the fine scroll).  The columns left of w0 (MCOL) and the
 ; GUARD lines above and below take whole motion objects (hidden: outside the display window, or the palette black).
 ;
@@ -29,18 +34,18 @@
 ; IRGB word (irgb_map); a pen whose STE colour changes makes what uses it be drawn again (P's tiles from the lists, the
 ; characters of its alphanumerics colour, the motion objects' baked images by their set's epoch).
 ;
-; Motion objects (mo_snapshot, mo_draw): drawn whole (the hidden margin left of the window, the guard lines, the panel
-; drawn over their right overhang), in MAME's band order (see mo_snapshot); baked on first use per (code, size, flip,
+; Motion objects (mo_snapshot, mo_draw): drawn whole (the hidden margin left of the window, the guard lines, the ring
+; right of the display window), in MAME's band order (see mo_snapshot); baked on first use per (code, size, flip,
 ; palette, the palette's colour mapping) into SPR_POOL: a HOG pass a row (Y count 4: the planes, END1-END3 the row's
-; opaque mask shifted, the source running on), the shadow rows (pen 1) a pass from P' at the same place.  With the
-; panel's characters not all opaque (the title, the high scores) the panel's playfield and objects are composed in
-; PBUF and copied in (panel_compose).
+; opaque mask shifted, the source running on), the shadow rows (pen 1) a pass from P' at the same place.
 ;
 ; Options: -D MO_ORDER=1 the objects' rows sorted by their mask (the reordered source; measured slower, see the
 ; README), -D NORENDER=1 no pictures (the game alone).
 ;
 ; Fixed memory: RING0 $200000, RING1 $260400, PFB $2C0800, PFS $2E0800, AIMG $300800, PF_LISTS $30A000, LUTS
-; $31A000, ALUTS $32A000, AL_LISTS $33A000, SPR_POOL $35F800-$3BFFFF, MO_HASH $3C2000-$3C7FFF, PBUF $3E0800-$3EB47F.
+; $31A000, ALUTS $32A000, AL_LISTS $33A000, SPR_POOL $35F800-$3BFFFF, MO_HASH $3C2000-$3C7FFF, BIMG $3E0800-$3E1E7F.
+
+	include	"bar.i"			; (tools/assets.py: BAR_N, BAR_LINES)
 
 STRIDE = 448
 RING_COLS = 56
@@ -57,7 +62,7 @@ LUTS = $31A000				; 32 x 2 KB: per colour set, a byte of two pixels -> their pla
 ALUTS = $32A000				; 64 x 1 KB: per alphanumerics colour, a byte of four 2-bit pixels -> plane nibbles
 AL_LISTS = $33A000			; 64 x 1200 words: the character positions of each alphanumerics colour
 SPR_POOL = $35F800			; the motion objects' baked images
-PBUF = $3E0800				; the panel composed when its characters are not all opaque (120 x 368)
+BIMG = $3E0800				; the status bar: BAR_LINES lines x 160 bytes
 SPR_POOL_END = $3C0000
 AL = 160				; AIMG's bytes a line
 AL_N = 1200				; (30 rows x 40 characters)
@@ -171,18 +176,14 @@ init_video:
 	move.w	#AL_N-1,d0
 .at:	clr.b	(a0)+
 	dbf	d0,.at
-	move.w	#30*12,panel_open	; (every panel character is 0: not opaque)
+	move.w	#30*11,panel_open	; (every panel character is 0: not opaque)
 	lea	al_voff,a0		; (a position's word in the alphanumerics: row * 128 + the arcade column * 2)
 	moveq	#0,d1
 .vr:	moveq	#0,d2
 .vk:	move.w	d1,d0
 	lsl.w	#7,d0
 	move.w	d2,d3
-	addq.w	#1,d3
-	cmp.w	#28,d2
-	blo	.vm
-	addq.w	#1,d3
-.vm:	add.w	d3,d3
+	add.w	d3,d3			; (the arcade's column k)
 	add.w	d3,d0
 	move.w	d0,(a0)+
 	addq.w	#1,d2
@@ -220,13 +221,39 @@ init_video:
 	move.w	#-1,last_bank
 	clr.w	ring_index
 	clr.b	frame_ready
+	; the status bar: empty; the display: ring 0's first line, then the bar from picture line 240 (borders.s'
+	; BD_VSWITCH: bd_hud_plan loads the playfield's address at the VBL, the Timer B the bar's at its first line)
+	lea	BIMG,a0
+	move.w	#BAR_LINES*AL/4-1,d0
+.bc:	clr.l	(a0)+
+	dbf	d0,.bc
+	lea	bar_shadow,a0
+	move.w	#BAR_N-1,d0
+.bs:	clr.w	(a0)+
+	dbf	d0,.bs
+	sf	bar_shown
+	sf	bar_dirty
+	sf	bar_all
+	movem.l	shown_pal,d0-d7
+	movem.l	d0-d7,hud_pal
+	clr.w	hud_top
+	move.w	#240,hud_bot
+	move.l	#RING0,d0
+	move.l	d0,flip_addr
+	move.l	d0,bd_vs_pf
+	move.w	#STRIDE,bd_vs_pfs
+	move.w	#(STRIDE-160)/2,bd_vs_pfl
+	clr.w	bd_vs_pfh
+	move.l	#BIMG-240*AL,bd_vs_bar	; (the bar image's line 0 at picture line 240)
+	move.w	#AL,bd_vs_bas
+	clr.w	bd_vs_bal
+	clr.w	bd_vs_bah
+	st	bd_vs_on
 	ifnd SIM
 	move.b	#0,$ffff8260.w
 	move.b	#2,$ffff820a.w
 	move.b	#(STRIDE-160)/2,$ffff820f.w
 	clr.b	$ffff8265.w
-	move.l	#RING0,d0
-	move.l	d0,flip_addr
 	lsr.l	#8,d0
 	move.b	d0,$ffff8203.w
 	lsr.w	#8,d0
@@ -250,27 +277,22 @@ ring_reset:
 	clr.w	RS_POVF(a0)
 	rts
 
-; the VBL: a finished picture is shown from now on (the address loaded into the video counter too, before the
-; display starts)
+; the VBL: a finished picture is shown from now on (its address, fine scroll and line width for borders.s'
+; bd_hud_plan, which the VBL calls next: it loads them into the Shifter before the display starts)
 vbl_video:
 	addq.l	#1,rf_vbls
 	tst.b	frame_ready
 	beq	.done
 	clr.b	frame_ready
-	ifnd SIM
-	move.b	flip_addr+1,$ffff8201.w
-	move.b	flip_addr+2,$ffff8203.w
-	move.b	flip_addr+3,$ffff820d.w
-	move.b	flip_addr+1,$ffff8205.w
-	move.b	flip_addr+2,$ffff8207.w
-	move.b	flip_addr+3,$ffff8209.w
-	move.b	flip_fine,$ffff8265.w
-	move.b	#(STRIDE-160)/2,d0
-	tst.b	flip_fine
+	move.l	flip_addr,bd_vs_pf
+	moveq	#0,d0
+	move.b	flip_fine,d0
+	move.w	d0,bd_vs_pfh
+	move.w	#(STRIDE-160)/2,d1
+	tst.w	d0
 	beq	.width
-	subq.b	#4,d0
-.width:	move.b	d0,$ffff820f.w
-	endc
+	subq.w	#4,d1
+.width:	move.w	d1,bd_vs_pfl
 .done:	rts
 
 ; ---------------------------------------------------------------------------------------------------------------------
@@ -311,6 +333,7 @@ render_frame:
 	bsr	ring_target
 	bsr	pal_update
 	bsr	alpha_update
+	bsr	bar_update
 	bsr	pf_update
 	bsr	ovl_build
 	bsr	ovl_classify
@@ -319,17 +342,13 @@ render_frame:
 	bsr	ovl_restore_old
 	bsr	pend_apply
 	bsr	mo_draw
-	tst.w	panel_open
-	beq	.np
-	bsr	panel_compose
-.np:	bsr	alpha_transparent
+	bsr	alpha_transparent
 	bsr	ovl_draw
 	bsr	ovl_save
 	bra	render_done
 
 ; scroll_set: the picture's place from the x scroll d0 and the y scroll word d1
 scroll_set:
-	addq.w	#8,d0
 	and.w	#511,d0
 	move.w	d0,sx
 	moveq	#15,d2
@@ -357,9 +376,7 @@ ring_target:
 	move.w	#STRIDE,tg_stride
 	move.w	#MCOL,tg_pcol
 	move.w	#GUARD,tg_pline
-	move.w	r0px,d0
-	subq.w	#8,d0
-	move.w	d0,tg_r0		; (the arcade's x 0)
+	move.w	r0px,tg_r0		; (the arcade's x 0)
 	move.w	top_t,tg_t
 	st	tg_dmg
 	rts
@@ -606,11 +623,8 @@ pf_update:
 	move.w	d1,pf_nq		; (nq - 1: 1 or 2)
 	move.w	sx,d7
 	lsr.w	#3,d7			; the first column
-	moveq	#29-1,d6		; (the maze: the arcade's x 8-231)
-	tst.w	panel_open
-	beq	.sw
-	moveq	#42-1,d6		; (and the panel's playfield: 240-335)
-.sw:	move.w	pf_sweep,d0		; one visible column in turn compared anyway (a writer the marks miss shows
+	moveq	#41-1,d6		; (the picture: the arcade's x 0-319, at any fine scroll)
+	move.w	pf_sweep,d0		; one visible column in turn compared anyway (a writer the marks miss shows
 	addq.w	#1,d0			; within 29 pictures)
 	cmp.w	d6,d0
 	bls.s	.sw1
@@ -984,6 +998,7 @@ alpha_update:
 .cmp:	bsr	cmp_run
 	beq	.nr
 	move.l	-4(a0),-4(a1)
+	st	bar_dirty
 	movem.l	d4/d7/a0-a1,-(sp)
 	move.l	a0,d0
 	sub.l	#ARC_VRAM+$5000+4,d0
@@ -1001,16 +1016,11 @@ alpha_update:
 	cmp.w	al_end,d7
 	blo	.row
 	bra	runs_update
-; arcade column d0.w of row d7.w: the character drawn again (columns 0 and 29 are not shown)
+; arcade column d0.w of row d7.w: the character drawn again (columns 40 and 41 are not shown)
 al_column:
-	tst.w	d0
-	beq	.no
-	cmp.w	#29,d0
-	beq	.no
-	blo	.m
-	subq.w	#1,d0
-.m:	subq.w	#1,d0			; k
-	bra	al_char
+	cmp.w	#40,d0
+	bhs	.no
+	bra	al_char			; (k: the same)
 .no:	rts
 
 ; al_char: the character k = d0.w of row d7.w drawn into AIMG (or noted as empty); its row's version bumped.
@@ -1021,11 +1031,7 @@ al_char:
 	add.w	d0,d1
 	move.w	d1,d5			; the position (row * 40 + k)
 	move.w	d0,d4			; k
-	move.w	d4,d1
-	cmp.w	#28,d1
-	blo	.a
-	addq.w	#1,d1
-.a:	addq.w	#1,d1			; the arcade column
+	move.w	d4,d1			; the arcade column
 	move.w	d7,d0
 	lsl.w	#6,d0
 	add.w	d1,d0
@@ -1053,7 +1059,7 @@ al_char:
 .t:	lea	al_type,a0
 	move.b	(a0,d5.w),d0
 	move.b	d6,(a0,d5.w)
-	cmp.w	#28,d4			; the panel: its characters not opaque counted
+	cmp.w	#29,d4			; the panel: its characters not opaque counted
 	blo	.tp
 	cmp.b	#1,d0
 	beq	.tp0
@@ -1153,6 +1159,132 @@ al_char:
 	dbf	d6,.row
 .done:	rts
 
+; bar_update: the status bar (BIMG) from the side panel's cells (bar_map: tools/bar.py) while the panel is up: a
+; cell whose word changed drawn again (all of them after a colour change or when the panel comes up); the bar
+; cleared when it goes.  Only after the alphanumerics changed (alpha_update: bar_dirty).
+bar_update:
+	move.b	bar_shown,d0
+	tst.w	panel_open
+	seq	d1
+	cmp.b	d1,d0
+	beq	.same
+	move.b	d1,bar_shown		; (the panel came up or went)
+	st	bar_all
+	tst.b	d1
+	bne	.same
+	lea	BIMG,a0			; gone: the bar empty
+	move.w	#BAR_LINES*AL/4-1,d0
+.cl:	clr.l	(a0)+
+	dbf	d0,.cl
+	lea	bar_shadow,a0
+	move.w	#BAR_N-1,d0
+.cs:	clr.w	(a0)+
+	dbf	d0,.cs
+	sf	bar_all
+	sf	bar_dirty
+	ifd SHOWFPS
+	move.w	#-1,fps_shown
+	endc
+	rts
+.same:	tst.b	bar_shown
+	beq	.no
+	move.b	bar_all,d0
+	or.b	bar_dirty,d0
+	beq	.no
+	move.b	bar_all,d5		; (every cell)
+	sf	bar_all
+	sf	bar_dirty
+	lea	bar_map,a3
+	lea	bar_shadow,a4
+	lea	bar_col,a5
+	move.w	#BAR_N-1,d6
+.cell:	move.w	(a3)+,d0		; its word in the alphanumerics
+	move.w	(a3)+,d1		; its byte in the bar
+	lea	ARC_VRAM+$5000,a0
+	move.w	(a0,d0.w),d3
+	tst.b	d5
+	bne	.draw
+	cmp.w	(a4),d3
+	bne	.draw
+	move.w	d3,d2			; (its colour changed? bits 10-13, bit 14 its 32)
+	lsr.w	#8,d2
+	lsr.w	#2,d2
+	and.w	#$0f,d2
+	btst	#14,d3
+	beq	.cx
+	or.w	#$20,d2
+.cx:	tst.b	(a5,d2.w)
+	beq	.nx
+.draw:	move.w	d3,(a4)
+	bsr	bar_put
+.nx:	addq.l	#2,a4
+	dbf	d6,.cell
+	lea	bar_col,a0		; (the colours dealt with)
+	moveq	#64/4-1,d0
+.cc:	clr.l	(a0)+
+	dbf	d0,.cc
+.no:
+	ifd SHOWFPS				; (the picture rate in the middle of the bar's last row: gauntlet.s)
+	move.w	fps_value,d0
+	cmp.w	fps_shown,d0
+	beq	.nf
+	move.w	d0,fps_shown
+	cmp.w	#99,d0
+	bls	.f9
+	moveq	#99,d0
+.f9:	ext.l	d0
+	divu	#10,d0
+	move.w	d0,d3
+	add.w	#$8030,d3		; (opaque, colour 0, the digit)
+	move.w	#27*AL+(19>>1)*8+(19&1),d1
+	move.l	d0,-(sp)
+	bsr	bar_put
+	move.l	(sp)+,d3
+	swap	d3
+	add.w	#$8030,d3
+	move.w	#27*AL+(20>>1)*8+(20&1),d1
+	bsr	bar_put
+.nf:
+	endc
+	rts
+
+; bar_put: the alphanumerics word d3 (its character and colour) drawn into the bar at its byte d1.  Uses d0-d4/a0-a2.
+bar_put:
+	lea	BIMG,a1
+	add.w	d1,a1
+	moveq	#0,d2
+	move.w	d3,d2			; the colour: bits 10-13, bit 14 its 32
+	lsr.w	#8,d2
+	lsr.w	#2,d2
+	and.w	#$0f,d2
+	btst	#14,d3
+	beq	.c
+	or.w	#$20,d2
+.c:	lea	ALUTS,a2
+	moveq	#10,d0
+	lsl.l	d0,d2
+	add.l	d2,a2			; the colour's table
+	and.w	#$3ff,d3
+	lsl.w	#4,d3
+	lea	char_rows,a0
+	add.w	d3,a0
+	moveq	#8-1,d4
+.row:	moveq	#0,d1
+	move.b	(a0)+,d1
+	add.w	d1,d1
+	add.w	d1,d1
+	move.l	(a2,d1.w),d0
+	lsl.l	#4,d0
+	moveq	#0,d1
+	move.b	(a0)+,d1
+	add.w	d1,d1
+	add.w	d1,d1
+	or.l	(a2,d1.w),d0
+	movep.l	d0,0(a1)
+	lea	AL(a1),a1
+	dbf	d4,.row
+	rts
+
 ; al_set_changed: alphanumerics pens 16 d7 .. (colours 4 d7 .. 4 d7 + 3) changed (mask d6): their tables made again,
 ; their listed characters drawn again.  Keeps d7/a4.
 al_set_changed:
@@ -1163,6 +1295,9 @@ al_set_changed:
 .c:	moveq	#15,d0
 	and.w	d6,d0
 	beq	.nc
+	lea	bar_col,a0		; (the bar's cells of this colour: drawn again)
+	st	(a0,d5.w)
+	st	bar_dirty
 	movem.l	d4-d6,-(sp)
 	move.w	d5,d0
 	bsr	alut_build
@@ -1361,14 +1496,22 @@ ovl_build:
 .emit:	moveq	#0,d4
 	move.b	(a0)+,d4		; the runs
 	bra	.re
-.run:	cmp.w	#OVL_MAX,new_novl
+.run:	moveq	#0,d0
+	move.b	(a0)+,d0		; c0
+	moveq	#0,d1
+	move.b	(a0)+,d1		; c1
+	tst.w	panel_open
+	bne	.wide
+	cmp.w	#29,d0			; (the panel is up: right of the maze it is in the bar)
+	bhs	.re
+	cmp.w	#29,d1
+	bls	.wide
+	moveq	#29,d1
+.wide:	cmp.w	#OVL_MAX,new_novl
 	bhs	.re
 	addq.w	#1,new_novl
-	moveq	#0,d0
-	move.b	(a0)+,d0
 	move.w	d0,OV_C0(a2)
-	move.b	(a0)+,d0
-	move.w	d0,OV_C1(a2)
+	move.w	d1,OV_C1(a2)
 	move.w	d7,d0
 	lsl.w	#3,d0
 	move.w	d0,OV_Y0(a2)
@@ -1502,7 +1645,7 @@ touch:
 	rts
 
 ; ---------------------------------------------------------------------------------------------------------------------
-; ring_validate: the ring's valid rectangle covers the picture's maze (columns w0 .. w0 + 14, lines T .. T + 239):
+; ring_validate: the ring's valid rectangle covers the picture (columns w0 .. w0 + 20, lines T .. T + 239):
 ; grown to the bounding box when that copies less than the window, else the window alone
 ring_validate:
 	move.l	cur_ring,a3
@@ -1514,7 +1657,7 @@ ring_validate:
 	clr.w	RS_VC0(a3)
 .p:	move.w	w0,d4			; V: d4 .. d5 - 1, d6 .. d7 - 1
 	move.w	d4,d5
-	add.w	#15,d5
+	add.w	#21,d5
 	move.w	top_t,d6
 	move.w	d6,d7
 	add.w	#240,d7
@@ -1548,7 +1691,7 @@ ring_validate:
 	cmp.w	d7,d3
 	bge	.b4
 	move.w	d7,d3
-.b4:	; area(B) - area(valid) against area(V) = 15 x 240
+.b4:	; area(B) - area(valid) against area(V) = 21 x 240
 	movem.w	d0-d3,bbox
 	sub.w	d0,d1
 	sub.w	d2,d3
@@ -1559,7 +1702,7 @@ ring_validate:
 	sub.w	RS_VL0(a3),d1
 	mulu	d0,d1
 	sub.l	d1,d3
-	cmp.l	#15*240,d3
+	cmp.l	#21*240,d3
 	bhi	.fresh
 	; B - valid: above, below (B's width), left, right (valid's lines)
 	movem.w	RS_VC0(a3),d4-d7	; valid: d4 .. d5, d6 .. d7
@@ -1595,7 +1738,7 @@ ring_validate:
 	movem.w	d0-d3,RS_VC0(a3)
 	rts
 .fresh:	move.w	w0,d0
-	moveq	#15,d1
+	moveq	#21,d1
 	move.w	top_t,d2
 	move.w	#240,d3
 	movem.w	d0-d3,-(sp)
@@ -2039,7 +2182,11 @@ alpha_transparent:
 	bsr	al_trans_char
 	movem.l	(sp)+,d6-d7
 .nk:	addq.w	#1,d6
-	cmp.w	#40,d6
+	moveq	#40,d0
+	tst.w	panel_open
+	bne	.kl
+	moveq	#29,d0			; (the panel is up: the maze's characters only)
+.kl:	cmp.w	d0,d6
 	blo	.k
 .nr:	addq.w	#1,d7
 	cmp.w	#30,d7
@@ -2048,12 +2195,7 @@ alpha_transparent:
 
 ; al_trans_char: character k = d6 of row d7 (its pixels from AIMG, its mask from the character's pixels not 0)
 al_trans_char:
-	move.w	d6,d0
-	addq.w	#1,d0			; the arcade column
-	cmp.w	#28,d6
-	blo	.m
-	addq.w	#1,d0
-.m:
+	move.w	d6,d0			; the arcade column
 	move.w	d7,d1
 	lsl.w	#6,d1
 	add.w	d1,d0
@@ -2453,8 +2595,8 @@ mo_place_memo:
 	rts
 
 ; mo_place: entry d1 (a0 = the y plane ARC_VRAM + $3000, a1 = the x plane + $2800): d2 = its x, d3 = its y (MAME's
-; wrap: y >= 240 is y - 512, x >= 336 x - 512), d4 = its lines; Z set when no part of it is visible (left of the maze,
-; in the gap at 232-239, right of the panel, above or below).  Keeps d1/d5-d7/a0-a6.
+; wrap: y >= 240 is y - 512, x >= 336 x - 512), d4 = its lines; Z set when no part of it is visible (outside the
+; arcade's x 0-319, above or below).  Keeps d1/d5-d7/a0-a6.
 mo_place:
 	move.w	d1,d0
 	add.w	d0,d0
@@ -2488,15 +2630,9 @@ mo_place:
 	sub.w	#512,d2
 .x:	move.w	d2,d0
 	add.w	d4,d0			; its right end
-	cmp.w	#8,d0
+	tst.w	d0
 	ble	.no2
-	cmp.w	#232,d2
-	blt	.yes
-	cmp.w	#240,d0
-	ble	.no2			; (in the gap)
-	tst.w	panel_open
-	beq	.no2			; (only the panel: under its characters)
-	cmp.w	#336,d2
+	cmp.w	#320,d2			; (the picture: the arcade's x 0-319)
 	bge	.no2
 .yes:	move.w	(sp)+,d4
 	moveq	#1,d0			; (Z clear)
@@ -2549,18 +2685,15 @@ mo_record:
 	move.w	d6,(a6)+
 .full:	rts
 
-; mo_draw: the records into the work ring (those in the maze)
+; mo_draw: the records into the work ring (mo_place kept only those in the picture)
 mo_draw:
 	lea	mo_recs,a6
 	move.w	mo_n,d7
 	bra	.n
-.r:	move.w	MR_X(a6),d0
-	cmp.w	#232,d0
-	bge	.nx
-	movem.l	d7/a6,-(sp)
+.r:	movem.l	d7/a6,-(sp)
 	bsr	mo_object
 	movem.l	(sp)+,d7/a6
-.nx:	lea	MR_SIZE(a6),a6
+	lea	MR_SIZE(a6),a6
 .n:	dbf	d7,.r
 	rts
 
@@ -3388,86 +3521,6 @@ shadow_fast:
 .two:	SHROW	2
 .one:	SHROW	1
 
-; ---------------------------------------------------------------------------------------------------------------------
-; panel_compose: the panel's characters are not all opaque (the title, the high scores): the arcade's x 240-335 of
-; the playfield and the objects composed in PBUF (laid out as a ring: its column c shows P's column
-; (c - pb_pcol) & 31, line l P's line (l - (64 - sy)) & 511; the objects drawn whole into its margins), then copied
-; into the ring at the picture's x 224 (a shifted copy: a damage rectangle); the characters come on top after.
-PB_STRIDE = 120				; 15 words: 4 margin, 7 for the 96 pixels at any shift, 4 margin
-PB_LINES = 368
-panel_compose:
-	move.l	work_base,-(sp)
-	move.l	#PBUF,work_base
-	move.w	#PB_STRIDE,tg_stride
-	move.w	snap_xs,d0
-	add.w	#240,d0
-	and.w	#511,d0
-	move.w	d0,d1
-	and.w	#15,d1
-	add.w	#64,d1
-	move.w	d1,pb_px		; PBUF's pixel of the arcade's x 240
-	sub.w	#240,d1
-	move.w	d1,tg_r0
-	lsr.w	#4,d0
-	moveq	#4,d1
-	sub.w	d0,d1
-	and.w	#31,d1
-	move.w	d1,tg_pcol
-	moveq	#64,d1
-	sub.w	sy,d1
-	move.w	d1,tg_pline
-	move.w	#64,tg_t
-	sf	tg_dmg
-	; the playfield: columns 4-10, lines 64-303
-	moveq	#4,d0
-	moveq	#7,d1
-	moveq	#64,d2
-	move.w	#240,d3
-	bsr	copy_rect
-	; the objects there
-	lea	mo_recs,a6
-	move.w	mo_n,d7
-	bra	.n
-.r:	move.w	MR_W2(a6),d0
-	lsr.w	#3,d0
-	and.w	#7,d0
-	addq.w	#1,d0
-	lsl.w	#3,d0
-	add.w	MR_X(a6),d0
-	cmp.w	#240,d0
-	ble	.nx
-	movem.l	d7/a6,-(sp)
-	bsr	mo_object
-	movem.l	(sp)+,d7/a6
-.nx:	lea	MR_SIZE(a6),a6
-.n:	dbf	d7,.r
-	move.l	(sp)+,work_base
-	bsr	ring_target
-	; PBUF's 96 pixels from pb_px, lines 64 .. into the ring at R0 + 224, T ..
-	move.l	#PBUF+64*PB_STRIDE,sb_src
-	move.w	#PB_STRIDE,sb_sstride
-	move.w	pb_px,sb_spx
-	move.l	work_base,d0
-	moveq	#0,d1
-	move.w	top_t,d1
-	mulu	#STRIDE,d1
-	add.l	d1,d0
-	move.l	d0,sb_dst
-	move.w	#STRIDE,sb_dstride
-	move.w	r0px,d0
-	add.w	#224,d0
-	move.w	d0,sb_dpx
-	move.w	#96,sb_w
-	move.w	#240,sb_lines
-	bsr	sblit
-	move.w	r0px,d0			; (its damage: restored next time)
-	add.w	#224,d0
-	lsr.w	#4,d0
-	moveq	#7,d1
-	move.w	top_t,d2
-	move.w	#240,d3
-	bra	dmg_add
-
 ; sblit: a shifted copy of sb_w pixels x sb_lines lines from sb_src (pixel sb_spx of its first line, sb_sstride bytes a
 ; line) to sb_dst (pixel sb_dpx, sb_dstride), four interleaved planes: a pass per plane
 sblit:
@@ -3578,6 +3631,7 @@ sblit:
 
 	section	data,data
 	even
+bar_map:	incbin	"bar_map.bin"	; (tools/bar.py: per cell its alphanumerics word, its byte in BIMG)
 palette_data:	incbin	"palette.bin"
 irgb_map:	incbin	"irgb_map.bin"
 tile_px:	incbin	"tile_px.bin"
@@ -3613,12 +3667,23 @@ runs_version:	ds.w	1
 ob_runs_v:	ds.w	1
 ob_r0px:	ds.w	1
 panel_open:	ds.w	1
+hud_top:	ds.w	1		; (borders.s BD_HUD: the bar from picture line hud_bot, in hud_pal)
+hud_bot:	ds.w	1
+hud_pal:	ds.w	16
+bar_shadow:	ds.w	BAR_N
+bar_shown:	ds.b	1
+bar_dirty:	ds.b	1
+bar_all:	ds.b	1
+	even
+bar_col:	ds.b	64		; (al_set_changed: the alphanumerics colours whose pens changed)
+	ifd SHOWFPS
+fps_shown:	ds.w	1
+	endc
 tg_stride:	ds.w	1
 tg_pcol:	ds.w	1
 tg_pline:	ds.w	1
 tg_r0:		ds.w	1
 tg_t:		ds.w	1
-pb_px:		ds.w	1
 mo_n:		ds.w	1
 mo_stamp:	ds.w	1
 mo_e:		ds.w	1

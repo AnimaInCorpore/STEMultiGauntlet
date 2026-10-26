@@ -1,20 +1,23 @@
 # Gauntlet (Atari Games, 1985) for the Atari STE
 
-2026-10-26: the game runs at the arcade's 60 frames a second (it ran one frame a VBL: 83%); the playfield and the
-alphanumerics are compared only where the game's writers marked them (the patched program calls the runtime), the
-picture 18-26% cheaper in play; the patcher follows jump tables (88 window addresses it had missed: a bus error in
-level 12).  Hatari: 32.6 pictures a second in light play (was 23.4).
+STEGauntlet: the arcade's Gauntlet on the STE, aimed at fast play and, later, networked play over the MIDI ports
+(MIDI-Maze style: every player on a screen of their own).  Imported from STEArcade (commit 0ba04dc) on 2026-10-26.
 
-2026-10-19: incoming playfield strips use the full-word copy dispatcher, and shifted panel/shadow copies
-look up piece sizes. The renderer harness now generates its fixed map without program coverage.
-See [measurements](../../docs/virtual-scroll-performance.md#implementation-results).
+2026-10-26 (STEGauntlet): the picture uses the whole screen.  The borders are open at the top and the bottom
+(stefastbobs2's screen, 276 lines): the maze over the full width, the arcade's x 0-319, in lines 0-239, hardware
+scrolled as before; the side panel is gone from the picture and its cells (scores, health, inventory, names, level)
+are laid out again in a status bar in lines 240-275 (`tools/bar.py`), a static image of its own that the Timer B
+switches the display to (the video counter and the palette reloaded at its first line: `engine/rt/borders.s`
+BD_HUD / BD_VSWITCH, PIC_TOP 0).  `-D SHOWFPS=1`: the picture rate of the last second in the bar's middle.  Hatari
+(attract mode's demo play): 27 pictures a second, 20 with a message box; a ghost horde now on screen (it was under
+the panel) costs ~800k cycles a picture (was ~470k).
 
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 
 STE port of MAME set `gauntlet` (rev 14; driver `atari/gauntlet.cpp`).  Unlike the other ports nothing is translated:
 the arcade's main CPU is a 68010, and its own program runs on the STE's 68000, patched in place.  The game's logic
 runs at the arcade's speed (60 frames a second: six for every five VBLs), the picture 16 times a second in Hatari in
-the attract mode, 33 in light play (busy scenes cost up to twice as much); 320 of the 336 pixels (the side panel moved left), all 240 lines, 16 colours; music, effects and
+the attract mode, 33 in light play (busy scenes cost up to twice as much); 320 of the 336 pixels and all 240 lines, the side panel as a status bar below, 16 colours; music, effects and
 speech.  Needs a 4 MB STE and the whole machine: the program takes TOS's memory, so **Esc resets** the STE (there is
 no return to the desktop and no CRASH.TXT; a crash turns the screen red and keeps its record at $3C1000).
 
@@ -98,8 +101,11 @@ Jaguar pad / PowerPad: pad A player 1, pad B player 2, **A** fire, **B / C** mag
 
 ### The picture (`src/render.s`, `tools/assets.py`)
 
-320 x 240 with the top and bottom borders open: the maze is the arcade's x 8-231 at the STE's 0-223, the panel (the
-alphanumerics' columns 30-41, the arcade's x 240-335) at 224-319.
+320 x 276 with the top and bottom borders open: the maze (playfield, objects, the alphanumerics' messages) is the
+arcade's x 0-319 at the STE's 0-319 in lines 0-239; the status bar (the side panel's cells: `tools/bar.py`) in lines
+240-275 from its own image (BIMG).  While the panel is up (its characters all opaque) the alphanumerics right of the
+maze (columns 29-39) go to the bar only; else (the title, the high scores, the monster pages' text) they are drawn
+over the playfield and the bar is empty.
 
 * **Playfield**: the 512 x 512 torus kept as a bitmap in STE planes, P, and P' in the shadow colours (pens $200-$27F);
   a tile is drawn into both when the game changes it in the visible window (compared with a copy where the game's
@@ -107,18 +113,19 @@ alphanumerics' columns 30-41, the arcade's x 240-335) at 224-319.
   the hardware scroll (base address, $ffff8265, $ffff820f); every ring position shows a fixed place of the torus, so
   moving the window copies only the strip a ring has never held, and a ring copies from P only the damage (objects,
   characters, the panel's old place).
-* **Alphanumerics**: drawn per changed character into a 320 x 240 image; runs of opaque characters (the panel is one
+* **Alphanumerics**: drawn per changed character into a 320 x 240 image; runs of opaque characters (a message box is one
   rectangle) are copied into the ring with the Blitter at the fine scroll, kept when the ring's place and the
   characters are unchanged; transparent characters by the CPU through their pixel masks.
 * **Motion objects**: as MAME, each band of 8 lines from its SLIP entry along the links; an object is drawn whole
-  when every band it covers lists it.  Drawn whole into the hidden margin left of the window and the guard lines; the
-  panel covers their right overhang.  Baked on first use per (code, size, flip, palette, the palette's colour
+  when every band it covers lists it.  Drawn whole into the hidden margin left of the window, the ring right of it and
+  the guard lines.  Baked on first use per (code, size, flip, palette, the palette's colour
   mapping) into a 400 KB pool as 32-pixel strips; a row is one HOG pass (Y count 4, the opaque mask in END1-END3,
   the END registers written only when the mask changes, the source address running on).  Shadow pixels (pen 1: the
   playfield's colour with bit 7 flipped) are a pass per row from P' at the same place, so they are exact.  The
   reordered-source variant (`-D MO_ORDER=1`) measured slower (`docs/sprite-preparation.md`).
-* **Full-width screens**: when the panel's characters are not all opaque (the title, the high scores), the arcade's
-  x 240-335 of the playfield and the objects are composed in a separate buffer and copied in.
+* **Status bar** (`tools/bar.py`, render.s bar_update): per cell the panel's word and the bar's byte; a cell is
+  drawn again when its word or its colour's pens change.  Two bands: players 1 | 2 over 3 | 4, each player's values
+  and inventory rows whole at the bar's edges, the names next to them, "LEVEL n" in the middle.
 * **Colours**: one fixed palette of 16 (`ref/palette_fit.py`, `docs/palette.json`): weighted k-means in Oklab over the
   attract mode and play in levels 1-16, 20 and 30 (the level poked at $904004), a colour's weight the square root of
   its share, the four player colours kept; mean error 4-5 of 255 a channel.  Every IRGB word maps to its nearest

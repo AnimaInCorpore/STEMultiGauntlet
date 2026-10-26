@@ -9,7 +9,8 @@ The reference board (tools/machine.py) runs the scenario (seed 0: the attract mo
 ref/cover.py's Player; 10-19: two to four players; --level L: the level number poked into the game's RAM ($904004)
 until the maze is built, so every level can be reached); from frame F on, every K-th frame its video RAM, palette and
 x scroll are copied to the STE addresses (map.i) and render_frame draws a picture, which is compared with the
-reference picture: the STE's x 0-223 against the arcade's 8-231 (the maze), 224-319 against 240-335 (the panel).
+reference picture: the STE's x 0-319 against the arcade's 0-319 (while the side panel is up, without the
+alphanumerics right of the maze), and the status bar (BIMG) against the panel's cells laid out by tools/bar.py.
 Consecutive pictures alternate between the two rings (the damage of the picture before last restored).
 --save: PNGs of the differing pictures (STE | reference | differences).
 """
@@ -28,6 +29,7 @@ from paths import ROOT, build_dir, src_dir, VASM, VLINK, RT_INCLUDE
 LEVEL_RAM = 0x904004                 # the level number (word; the panel's "LEVEL n" prints it, $41784)
 LEVEL_POKE_UNTIL = 790               # (held until the first player's maze is built)
 STRIDE = 448                         # (render.s)
+BIMG = 0x3E0800                      # (render.s: the status bar, 160 bytes a line)
 
 
 def scenario(seed, level=0, frames=3000, sound=True):
@@ -173,10 +175,15 @@ class Harness:
         fine = mem.r8(sym["flip_fine"])
         return ring_pixels(bytes(mem.r_block(base, 240 * STRIDE)), 240, 21)[:, fine:fine + 320]
 
+    def bar(self):
+        """the status bar: [BAR_LINES, 320] colour indices"""
+        import bar
+        return ring_pixels(bytes(self.sim.mem.r_block(BIMG, bar.BAR_LINES * 160)), bar.BAR_LINES, 20, 160)
 
-def ring_pixels(data, lines, words):
-    """interleaved 4-plane lines (STRIDE bytes) -> [lines, words * 16] colour indices"""
-    a = np.frombuffer(data, np.uint8).reshape(lines, STRIDE)[:, :words * 8].reshape(lines, words, 4, 2)
+
+def ring_pixels(data, lines, words, stride=STRIDE):
+    """interleaved 4-plane lines (stride bytes) -> [lines, words * 16] colour indices"""
+    a = np.frombuffer(data, np.uint8).reshape(lines, stride)[:, :words * 8].reshape(lines, words, 4, 2)
     bits = np.unpackbits(a, axis=3).reshape(lines, words, 4, 16)
     pix = (bits * (1 << np.arange(4))[None, None, :, None]).sum(2)
     return pix.reshape(lines, words * 16).astype(np.uint8)
@@ -214,8 +221,8 @@ def main():
         used = h.draw()
         if checked:
             cyc.append(used)                                # (not the first: init_video, every tile and character)
-        got = h.picture()
-        want = oracle.picture_raw(vram, m.palette(), m.xscroll)
+        got = np.vstack((h.picture(), h.bar()))
+        want = np.vstack((oracle.picture_raw(vram, m.palette(), m.xscroll), oracle.bar(vram, m.palette())))
         checked += 1
         n = int((got != want).sum())
         if n:

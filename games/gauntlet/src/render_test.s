@@ -4,13 +4,13 @@
 ; init_video runs before the picture (on the first state, as gauntlet.s calls it on the BIOS's).
 
 	include	"map.i"
-	ifnd PIC_TOP
-PIC_TOP = 18
-	endc
+PIC_TOP = 0				; (as gauntlet.s)
 TA_DATA = 98
 TA_NOPS = 84
-PIC_LINES = 240
+PIC_LINES = 276
 BD_PALETTE = 1
+BD_HUD = 1
+BD_VSWITCH = 1
 	include	"borders.s"
 
 	section	text,code
