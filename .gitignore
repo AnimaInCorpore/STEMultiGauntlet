@@ -1,0 +1,18 @@
+# derived from the ROMs / reproducible: python games/gauntlet/tools/build.py
+build/
+run/
+release/
+# the ROM set is never part of the repository: assets/gauntlet.zip is supplied locally, assets/extracted/ is unpacked
+# from it by games/gauntlet/tools/prepare.py
+assets/*
+!assets/README.md
+*.pkl
+*.png
+__pycache__/
+venv/
+.DS_Store
+# ...but documentation images are committed
+!games/*/docs/**/*.png
+# MAME writes its configuration and snapshots into the directory it runs in
+cfg/
+snap/
