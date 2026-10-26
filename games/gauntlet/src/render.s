@@ -95,7 +95,14 @@ RS_POVF = 20				; (pending tiles overflowed: the valid rectangle is dropped)
 RS_DMG = 24				; col.w, cols.w, line.w, lines.w
 RS_OVL = RS_DMG+DMG_MAX*8
 RS_PEND = RS_OVL+OVL_MAX*OV_SIZE	; tiles to copy from P (video RAM word index: column * 64 + row)
-RS_SIZE = RS_PEND+PEND_MAX*2
+RS_TR = RS_PEND+PEND_MAX*2		; per character row (30): its transparent characters as drawn in the ring:
+TR_VER = 0				;   the row's version then (row_ver).l
+TR_LINE = 4				;   the ring line of its first line.w
+TR_W0 = 6				;   the first ring word.w
+TR_NW = 8				;   the words.w (0: none drawn)
+TR_SIZE = 12
+RS_TRN = RS_TR+30*TR_SIZE		; (the rows with a record)
+RS_SIZE = RS_TRN+2
 
 BLT_HT = $ffff8a00
 BLT_SXI = $ffff8a20
@@ -200,6 +207,7 @@ init_video:
 	moveq	#30-1,d0
 .r2:	clr.b	(a0)+
 	dbf	d0,.r2
+	clr.w	t2_total
 	lea	row_ver,a0
 	moveq	#30-1,d0
 .rv:	clr.l	(a0)+
@@ -275,6 +283,12 @@ ring_reset:
 	clr.w	RS_NOVL(a0)
 	clr.w	RS_NPEND(a0)
 	clr.w	RS_POVF(a0)
+	clr.w	RS_TRN(a0)
+	lea	RS_TR+TR_NW(a0),a1
+	moveq	#30-1,d0
+.tr:	clr.w	(a1)
+	lea	TR_SIZE(a1),a1
+	dbf	d0,.tr
 	rts
 
 ; the VBL: a finished picture is shown from now on (its address, fine scroll and line width for borders.s'
@@ -337,7 +351,16 @@ render_frame:
 	bsr	pf_update
 	bsr	ovl_build
 	bsr	ovl_classify
+	lea	tr_touch,a0		; (no character row written yet this picture)
+	moveq	#30/2-1,d0
+.tt:	clr.w	(a0)+
+	dbf	d0,.tt
+	move.l	cur_ring,a0		; (rows to note: transparent characters now or in the ring's records)
+	move.w	t2_total,d0
+	or.w	RS_TRN(a0),d0
+	sne	tr_on
 	bsr	ring_validate
+	bsr	tr_restore
 	bsr	dmg_restore
 	bsr	ovl_restore_old
 	bsr	pend_apply
@@ -1072,9 +1095,11 @@ al_char:
 	cmp.b	#2,d0
 	bne	.t1
 	subq.b	#1,(a0,d7.w)
+	subq.w	#1,t2_total
 .t1:	cmp.b	#2,d6
 	bne	.t2
 	addq.b	#1,(a0,d7.w)
+	addq.w	#1,t2_total
 .t2:	; the row's version
 	addq.l	#1,al_counter
 	move.w	d7,d0
@@ -1609,7 +1634,27 @@ ovl_classify:
 ; again in those lines.  Keeps d0-d7/a0-a6 but a5.
 touch:
 	movem.l	d4-d7/a2,-(sp)
-	lea	new_ovl,a2
+	tst.b	tr_on			; (no transparent characters in the picture or the ring: no rows to note)
+	beq.s	.to
+	move.w	d2,d4			; the picture's character rows these lines cover: written (tr_touch)
+	sub.w	top_t,d4
+	move.w	d4,d5
+	add.w	d3,d5
+	subq.w	#1,d5
+	asr.w	#3,d4
+	bpl.s	.t0
+	moveq	#0,d4
+.t0:	asr.w	#3,d5
+	cmp.w	#29,d5
+	ble.s	.t1
+	moveq	#29,d5
+.t1:	lea	tr_touch,a2
+	bra.s	.tn
+.tm:	st	(a2,d4.w)
+	addq.w	#1,d4
+.tn:	cmp.w	d5,d4
+	ble.s	.tm
+.to:	lea	new_ovl,a2
 	move.w	new_novl,d7
 	bra	.nn
 .n:	tst.w	OV_KEEP(a2)
@@ -2167,10 +2212,33 @@ ovl_blit:
 ; alpha_transparent: the maze's transparent characters with pixels (rare: drawn by the CPU over what is there, their
 ; pixel 0 left out); their damage noted
 alpha_transparent:
+	tst.w	t2_total
+	beq	.none
 	moveq	#0,d7
 .row:	lea	row_t2,a0
 	tst.b	(a0,d7.w)
 	beq	.nr
+	move.l	cur_ring,a1		; the ring's record of the row: kept when it is drawn there, of this version,
+	move.w	d7,d0			; and nothing wrote into its lines this picture
+	mulu	#TR_SIZE,d0
+	add.w	#RS_TR,d0
+	lea	(a1,d0.w),a1
+	move.l	a1,tr_rec
+	lea	row_ver,a0
+	move.w	d7,d0
+	add.w	d0,d0
+	add.w	d0,d0
+	move.l	(a0,d0.w),d0
+	tst.w	TR_NW(a1)
+	beq	.draw
+	cmp.l	TR_VER(a1),d0
+	bne	.draw
+	lea	tr_touch,a0
+	tst.b	(a0,d7.w)
+	beq	.nr
+.draw:	move.l	d0,TR_VER(a1)
+	move.w	#999,tr_lo		; (the row's span of ring words)
+	move.w	#-1,tr_hi
 	moveq	#0,d6
 .k:	lea	al_type,a0
 	move.w	d7,d0
@@ -2181,6 +2249,13 @@ alpha_transparent:
 	movem.l	d6-d7,-(sp)
 	bsr	al_trans_char
 	movem.l	(sp)+,d6-d7
+	cmp.w	tr_lo,d0
+	bge	.lo
+	move.w	d0,tr_lo
+.lo:	addq.w	#1,d0			; (a character covers two words)
+	cmp.w	tr_hi,d0
+	ble	.nk
+	move.w	d0,tr_hi
 .nk:	addq.w	#1,d6
 	moveq	#40,d0
 	tst.w	panel_open
@@ -2188,10 +2263,76 @@ alpha_transparent:
 	moveq	#29,d0			; (the panel is up: the maze's characters only)
 .kl:	cmp.w	d0,d6
 	blo	.k
+	move.l	tr_rec,a1		; the row's record: its lines and words as drawn now
+	move.w	d7,d0
+	lsl.w	#3,d0
+	add.w	top_t,d0
+	move.w	d0,TR_LINE(a1)
+	move.w	tr_lo,d0
+	move.w	d0,TR_W0(a1)
+	move.w	tr_hi,d1
+	sub.w	d0,d1
+	addq.w	#1,d1
+	bgt	.sp
+	moveq	#0,d1			; (none: the panel's characters only)
+.sp:	move.l	cur_ring,a0		; (the ring's count of rows with a record)
+	tst.w	TR_NW(a1)
+	beq	.c0
+	subq.w	#1,RS_TRN(a0)
+.c0:	tst.w	d1
+	beq	.c1
+	addq.w	#1,RS_TRN(a0)
+.c1:	move.w	d1,TR_NW(a1)
 .nr:	addq.w	#1,d7
 	cmp.w	#30,d7
 	blo	.row
-	rts
+.none:	rts
+
+; tr_restore: the ring's transparent characters that will not stay copied back from P before anything is drawn: all
+; when the ring is at another place now, else the rows whose version changed (alpha_transparent draws the rows again
+; that this or any other write touches)
+tr_restore:
+	move.l	cur_ring,a3
+	tst.w	RS_TRN(a3)
+	beq	.none
+	moveq	#0,d6			; (the same place: 0)
+	move.w	RS_W0(a3),d0
+	cmp.w	w0,d0
+	bne	.moved
+	move.w	RS_F(a3),d0
+	cmp.w	fine,d0
+	bne	.moved
+	move.w	RS_T(a3),d0
+	cmp.w	top_t,d0
+	beq	.go
+.moved:	moveq	#1,d6
+.go:	lea	RS_TR(a3),a4
+	moveq	#0,d7			; the row
+.row:	tst.w	TR_NW(a4)
+	beq	.nx
+	tst.w	d6
+	bne	.rest
+	lea	row_ver,a0
+	move.w	d7,d0
+	add.w	d0,d0
+	add.w	d0,d0
+	move.l	(a0,d0.w),d0
+	cmp.l	TR_VER(a4),d0
+	beq	.nx
+.rest:	move.w	TR_W0(a4),d0
+	move.w	TR_NW(a4),d1
+	move.w	TR_LINE(a4),d2
+	moveq	#8,d3
+	clr.w	TR_NW(a4)
+	subq.w	#1,RS_TRN(a3)
+	movem.l	d6-d7/a3-a4,-(sp)
+	bsr	copy_rect_s
+	movem.l	(sp)+,d6-d7/a3-a4
+.nx:	lea	TR_SIZE(a4),a4
+	addq.w	#1,d7
+	cmp.w	#30,d7
+	blo	.row
+.none:	rts
 
 ; al_trans_char: character k = d6 of row d7 (its pixels from AIMG, its mask from the character's pixels not 0)
 al_trans_char:
@@ -2269,10 +2410,8 @@ al_trans_char:
 	lea	STRIDE-8(a1),a1
 	dbf	d7,.line
 	movem.l	(sp)+,d2/d4
-	move.w	d4,d0
-	moveq	#2,d1
-	moveq	#8,d3
-	bra	dmg_add
+	move.w	d4,d0			; (its first ring word: the caller keeps the row's span)
+	rts
 
 ; ---------------------------------------------------------------------------------------------------------------------
 ; The motion objects.  MAME draws each band of 8 lines from the band's SLIP entry along the links until an entry
@@ -4157,6 +4296,13 @@ runs_version:	ds.w	1
 ob_runs_v:	ds.w	1
 ob_r0px:	ds.w	1
 panel_open:	ds.w	1
+tr_touch:	ds.b	30		; (the character rows written this picture: touch)
+tr_on:		ds.b	1
+	even
+t2_total:	ds.w	1		; (the transparent characters with pixels: row_t2's sum)
+tr_rec:		ds.l	1
+tr_lo:		ds.w	1
+tr_hi:		ds.w	1
 hud_top:	ds.w	1		; (borders.s BD_HUD: the bar from picture line hud_bot, in hud_pal)
 hud_bot:	ds.w	1
 hud_pal:	ds.w	16

@@ -15,7 +15,10 @@ match (`tools/patch.py` WIDE, 24 places): it kept players inside x < 216 of the 
 monsters beyond it, woke generators and aimed the magic only there, and centred the camera at x 104 with its right
 limit for a non-wrapping maze at the old area's edge; now the bounds are 88 pixels wider, the camera centres the
 players at x 152 and stops with the right wall at the picture's edge.  `tools/logic_test.py` runs the original program
-with the same patches (equal VBL for VBL, 8000 VBLs, seeds 3 and 12).  Hatari
+with the same patches (equal VBL for VBL, 8000 VBLs, seeds 3 and 12).  Transparent characters (the high-score and
+"score per coin" pages are made of them) are kept in each ring between pictures: a row is copied back from P and
+drawn again only when it changed, the ring moved, or something else wrote into its lines (`touch` notes the rows):
+those pages 4.1M -> 72-104k cycles a picture, Hatari 1-2 -> 49-50 pictures a second.  Hatari
 (attract mode's demo play): 27 pictures a second, 20 with a message box; a ghost horde now on screen (it was under
 the panel) costs ~800k cycles a picture (was ~470k).
 
