@@ -19,6 +19,7 @@
 	include	"map.i"			; (tools/patch.py: ARC_VRAM ... RT_BASE)
 
 ARC_IRQ4 = $34A				; the arcade's vector 28 (IRQ 4, the vertical blank)
+STARVE = 4				; (VBLs without a picture: the game paused for the renderer, see vbl)
 ARC_IRQ6 = $36C				; vector 30 (IRQ 6, a sound response)
 KEY_ESC = $01
 MFP_VEC = $A0				; the MFP's vector base: vectors $A0-$AF at $280-$2BF (unused by the game's ROM)
@@ -125,8 +126,10 @@ render_loop:
 	bne	reset_ste
 	move.l	frames_done,d0
 	cmp.l	frames_drawn,d0
+	bne.s	.draw
+	tst.b	starving		; (starving: the picture of what the game has now, its frame paused or waiting)
 	beq.s	render_loop
-	move.l	d0,frames_drawn
+.draw:	move.l	d0,frames_drawn
 	bsr	render_frame
 	addq.l	#1,pictures
 	bra.s	render_loop
@@ -327,6 +330,18 @@ vbl:
 	lea	vbl_stack_top,sp	; little room below the program's variables)
 	movem.l	d0-d7/a0-a6,-(sp)
 	addq.l	#1,vbl_count
+	move.l	pictures,d0		; (the pictures: none for STARVE VBLs, the renderer gets the CPU: starving)
+	cmp.l	starve_pics,d0
+	beq.s	.st
+	move.l	d0,starve_pics
+	clr.b	starve_vbls
+	sf	starving
+	bra.s	.sd
+.st:	addq.b	#1,starve_vbls
+	cmp.b	#STARVE,starve_vbls
+	blo.s	.sd
+	st	starving
+.sd:
 	ifd SHOWFPS				; (the pictures of the last 50 VBLs: render.s shows them in the status bar)
 	subq.b	#1,fps_phase
 	bpl.s	.fp
@@ -357,7 +372,10 @@ vbl:
 	move.l	vbl_sp,sp
 	tst.b	in_game
 	bne.s	vbl_nested
-	movem.l	d0-d7/a0-a6,-(sp)
+	tst.b	starving		; (the renderer starving: the game waits a VBL more, its tick lost)
+	beq.s	.go
+	rte
+.go:	movem.l	d0-d7/a0-a6,-(sp)
 	move.l	sp,render_sp		; the picture's thread: its registers and the VBL's frame on its stack
 	st	in_game
 	move.l	game_sp,sp
@@ -377,7 +395,16 @@ game_resume:
 	movem.l	(sp)+,d0-d7/a0-a6
 	rte
 vbl_nested:				; the game's frame is still running: only its IRQ 4 (the CPU's frame is on its
-	jmp	ARC_IRQ4		; stack)
+	tst.b	starving		; stack); the renderer starving: the game's thread paused here (its registers and
+	bne.s	preempt			; this interrupt's frame on its stack, as yield leaves them), the picture's resumed
+	jmp	ARC_IRQ4
+preempt:
+	movem.l	d0-d7/a0-a6,-(sp)
+	move.l	sp,game_sp
+	sf	in_game
+	move.l	render_sp,sp
+	movem.l	(sp)+,d0-d7/a0-a6
+	rte
 
 ; IRQ 6 for each sound reply waiting (the replies, oldest first, through the game's handler), then the frame on the
 ; stack (the caller's RTE target).  Interrupts off.
@@ -696,6 +723,10 @@ vbl_count:	ds.l	1
 frames_done:	ds.l	1
 frames_drawn:	ds.l	1
 pictures:	ds.l	1
+starve_pics:	ds.l	1		; (the pictures at the last VBL that saw them change)
+starve_vbls:	ds.b	1		; (the VBLs since)
+starving:	ds.b	1		; (STARVE of them: the renderer gets the CPU until its picture is done)
+	even
 	ifd SHOWFPS
 fps_last:	ds.l	1
 fps_value:	ds.w	1

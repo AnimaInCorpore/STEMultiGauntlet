@@ -5,7 +5,8 @@
 ; The layout (the borders open: 276 lines, engine/rt/borders.s with PIC_TOP 0): the maze over the whole width, the
 ; arcade's x 0-319 at the STE's 0-319 (the alphanumerics' columns 0-39 at the STE's characters 0-39), lines 0-239;
 ; the status bar in lines 240-275 from its own image (BIMG, tools/bar.py: the side panel's cells laid out again), the
-; Timer B switching the video address there.  While the side panel is up (its characters, the arcade's columns 29-39,
+; Timer B switching the video address and the palette there: the bar has its own 16 colours (bar_cols, the panel's own
+; colours: docs/scenes.json "bar"; its characters drawn through bar_pmap / BALUTS).  While the side panel is up (its characters, the arcade's columns 29-39,
 ; all opaque: panel_open = 0) the alphanumerics right of the maze (characters 29-39) are not drawn over the playfield
 ; and the panel goes to the bar; else (the title, the high scores) they are, and the bar is empty.
 ;
@@ -30,9 +31,20 @@
 ; alphanumerics' image AIMG (the 320 x 240 picture of the alphanumerics in STE planes, drawn per character when one
 ; changes): a shifted Blitter copy per plane; only its lines that anything else touched when it is kept.
 ;
-; Colours: one fixed palette of 16 (tools/assets.py, docs/palette.json): every pen maps to the nearest colour of its
-; IRGB word (irgb_map); a pen whose STE colour changes makes what uses it be drawn again (P's tiles from the lists, the
-; characters of its alphanumerics colour, the motion objects' baked images by their set's epoch).
+; Colours: a palette of 16 per scene (docs/scenes.json, ref/scene_palettes.py: SCENE_N fitted to the attract mode's
+; pages and to play; 0 the general one, docs/palette.json): every pen maps to the nearest colour of the current scene's
+; palette (its IRGB word as 4-bit RGB, ir4, through the scene's table scene_idx); a pen whose STE colour changes makes
+; what uses it be drawn again (P's tiles from the lists, the characters of its alphanumerics colour, the motion
+; objects' baked images by their set's epoch).  scene_check (every 32 pictures) scores every scene's palette on the
+; pens in use (scene_err, weighted by the listed tiles, characters and objects of each set) and changes to a clearly
+; better one: every pen mapped again.  The palette goes with the picture (flip_pal: the VBL shows both together).
+; The attract pages' animation is left out: while the side panel is down (the title) the objects' colours are taken
+; once, when no large change came for MO_STILL pictures, and held until it comes up.  Colour cycling is left out
+; (pal_range_frz: small changes to shown pens of the playfield and the motion objects are
+; not taken: the title's shimmer, the playfield's flickering and pulsing pens); heavy colour effects are thinned out:
+; the playfield's and the motion objects' pens are compared every 4th picture, the objects' only every 32nd while a change is heavy (a fade, or one that makes more than 48 objects
+; baked again); the text's always.  A picture the
+; work ring shows already (pic_same: nothing changed since it was drawn there) is not drawn again.
 ;
 ; Motion objects (mo_snapshot, mo_draw): drawn whole (the hidden margin left of the window, the guard lines, the ring
 ; right of the display window), in MAME's band order (see mo_snapshot); baked on first use per (code, size, flip,
@@ -46,6 +58,7 @@
 ; $31A000, ALUTS $32A000, AL_LISTS $33A000, SPR_POOL $35F800-$3BFFFF, MO_HASH $3C2000-$3C7FFF, BIMG $3E0800-$3E1E7F.
 
 	include	"bar.i"			; (tools/assets.py: BAR_N, BAR_LINES)
+	include	"scenes.i"		; (tools/assets.py: SCENE_N)
 
 STRIDE = 448
 RING_COLS = 56
@@ -102,7 +115,11 @@ TR_W0 = 6				;   the first ring word.w
 TR_NW = 8				;   the words.w (0: none drawn)
 TR_SIZE = 12
 RS_TRN = RS_TR+30*TR_SIZE		; (the rows with a record)
-RS_SIZE = RS_TRN+2
+RS_SAL = RS_TRN+2			; what the ring's last picture was drawn of (pic_same): al_counter.l,
+RS_SCOL = RS_SAL+4			;   col_epoch.w, the objects' checksum (mo_hash).l, valid.w
+RS_SMO = RS_SCOL+2
+RS_SOK = RS_SMO+4
+RS_SIZE = RS_SOK+2
 
 BLT_HT = $ffff8a00
 BLT_SXI = $ffff8a20
@@ -122,11 +139,19 @@ BLT_SKEW = $ffff8a3d
 
 ; ---------------------------------------------------------------------------------------------------------------------
 init_video:
-	lea	palette_data,a0
+	lea	scene_cols,a0		; scene 0 (the general palette)
 	lea	shown_pal,a1
+	lea	flip_pal,a2
 	moveq	#8-1,d0
-.pal:	move.l	(a0)+,(a1)+
+.pal:	move.l	(a0),(a1)+
+	move.l	(a0)+,(a2)+
 	dbf	d0,.pal
+	clr.w	scene_cur
+	move.w	#-1,sc_cand
+	move.w	#SCENE_DUE,scene_due
+	move.l	#scene_idx,scene_idx_p
+	move.w	#-1,pal_tick		; (the first picture compares every pen)
+	move.w	#MO_FADE_EVERY,mo_fade_ctr
 	lea	black_pal,a1
 	moveq	#8-1,d0
 .bp:	clr.l	(a1)+
@@ -155,14 +180,9 @@ init_video:
 	move.l	d1,(a1)+
 	dbf	d0,.pf
 	bsr	pf_mark_all
-	st	al_dirty
-	lea	ARC_VRAM+$5000,a0
-	lea	al_shadow,a1
-	move.w	#30*128/4-1,d0
-.al:	move.l	(a0)+,d1
-	not.l	d1
-	move.l	d1,(a1)+
-	dbf	d0,.al
+	clr.w	view_dx
+	clr.w	view_col
+	bsr	al_reset
 	lea	pf_listed,a0
 	move.w	#4096/4-1,d0
 .pl:	clr.l	(a0)+
@@ -171,43 +191,6 @@ init_video:
 	moveq	#8-1,d0
 .pn:	clr.w	(a0)+
 	dbf	d0,.pn
-	lea	al_listed,a0
-	move.w	#AL_N-1,d0
-.ll:	move.b	#$ff,(a0)+
-	dbf	d0,.ll
-	lea	al_list_n,a0
-	moveq	#64-1,d0
-.ln:	clr.w	(a0)+
-	dbf	d0,.ln
-	lea	al_type,a0
-	move.w	#AL_N-1,d0
-.at:	clr.b	(a0)+
-	dbf	d0,.at
-	move.w	#30*11,panel_open	; (every panel character is 0: not opaque)
-	lea	al_voff,a0		; (a position's word in the alphanumerics: row * 128 + the arcade column * 2)
-	moveq	#0,d1
-.vr:	moveq	#0,d2
-.vk:	move.w	d1,d0
-	lsl.w	#7,d0
-	move.w	d2,d3
-	add.w	d3,d3			; (the arcade's column k)
-	add.w	d3,d0
-	move.w	d0,(a0)+
-	addq.w	#1,d2
-	cmp.w	#40,d2
-	blo	.vk
-	addq.w	#1,d1
-	cmp.w	#30,d1
-	blo	.vr
-	lea	row_runs,a0
-	move.w	#30*RR_SIZE-1,d0
-.rr:	clr.b	(a0)+
-	dbf	d0,.rr
-	lea	row_t2,a0
-	moveq	#30-1,d0
-.r2:	clr.b	(a0)+
-	dbf	d0,.r2
-	clr.w	t2_total
 	lea	row_ver,a0
 	moveq	#30-1,d0
 .rv:	clr.l	(a0)+
@@ -242,8 +225,16 @@ init_video:
 	sf	bar_shown
 	sf	bar_dirty
 	sf	bar_all
-	movem.l	shown_pal,d0-d7
+	movem.l	bar_cols,d0-d7		; (the status bar's own palette: the Timer B loads it at its first line)
 	movem.l	d0-d7,hud_pal
+	lea	bar_pmap,a0		; (no text pen's bar colour known yet)
+	moveq	#256/4-1,d0
+.bpm:	move.l	#$ffffffff,(a0)+
+	dbf	d0,.bpm
+	lea	balut_ok,a0
+	moveq	#64/4-1,d0
+.bo:	clr.l	(a0)+
+	dbf	d0,.bo
 	clr.w	hud_top
 	move.w	#240,hud_bot
 	move.l	#RING0,d0
@@ -270,6 +261,84 @@ init_video:
 	endc
 	rts
 
+; al_reset: the alphanumerics' state as at the start (every character to be drawn again: their copy made to differ,
+; their types, lists and runs empty, the panel not opaque); the picture's characters k at the arcade's columns
+; view_col + k (al_voff).  The row versions go on counting (the rings' records stay older).
+al_reset:
+	st	al_dirty
+	lea	ARC_VRAM+$5000,a0
+	lea	al_shadow,a1
+	move.w	#30*128/4-1,d0
+.al:	move.l	(a0)+,d1
+	not.l	d1
+	move.l	d1,(a1)+
+	dbf	d0,.al
+	lea	al_listed,a0
+	move.w	#AL_N-1,d0
+.ll:	move.b	#$ff,(a0)+
+	dbf	d0,.ll
+	lea	al_list_n,a0
+	moveq	#64-1,d0
+.ln:	clr.w	(a0)+
+	dbf	d0,.ln
+	lea	al_type,a0
+	move.w	#AL_N-1,d0
+.at:	clr.b	(a0)+
+	dbf	d0,.at
+	move.w	#30*11,panel_open	; (every panel character is 0: not opaque)
+	lea	al_voff,a0		; (a position's word in the alphanumerics: row * 128 + the arcade column * 2)
+	moveq	#0,d1
+.vr:	moveq	#0,d2
+.vk:	move.w	d1,d0
+	lsl.w	#7,d0
+	move.w	d2,d3
+	add.w	view_col,d3		; (the arcade's column view_col + k)
+	add.w	d3,d3
+	add.w	d3,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d2
+	cmp.w	#40,d2
+	blo	.vk
+	addq.w	#1,d1
+	cmp.w	#30,d1
+	blo	.vr
+	lea	row_runs,a0
+	move.w	#30*RR_SIZE-1,d0
+.rr:	clr.b	(a0)+
+	dbf	d0,.rr
+	lea	runs_dirty,a0
+	moveq	#30-1,d0
+.rd:	st	(a0)+
+	dbf	d0,.rd
+	st	row_dirty
+	lea	row_t2,a0
+	moveq	#30-1,d0
+.r2:	clr.b	(a0)+
+	dbf	d0,.r2
+	clr.w	t2_total
+	rts
+
+; view_check (after alpha_update): the picture shows the arcade's x 0-319 while the side panel is up (play: the camera
+; centres the players there), x 8-327 while it is down (the title, the tables: centred on the arcade's 336 pixels).
+; A change: the characters at their new places (al_reset, alpha_update), the scroll and the target again.
+view_check:
+	moveq	#0,d0
+	tst.w	panel_open
+	beq.s	.up
+	moveq	#8,d0
+.up:	cmp.w	view_dx,d0
+	beq.s	.x
+	move.w	d0,view_dx
+	lsr.w	#3,d0
+	move.w	d0,view_col
+	bsr	al_reset
+	bsr	alpha_update
+	move.w	snap_xs,d0
+	move.w	snap_ys,d1
+	bsr	scroll_set
+	bsr	ring_target
+.x:	rts
+
 ; a0 = a ring's state: nothing valid, nothing drawn
 ring_reset:
 	clr.w	RS_VC0(a0)
@@ -284,6 +353,7 @@ ring_reset:
 	clr.w	RS_NPEND(a0)
 	clr.w	RS_POVF(a0)
 	clr.w	RS_TRN(a0)
+	clr.w	RS_SOK(a0)
 	lea	RS_TR+TR_NW(a0),a1
 	moveq	#30-1,d0
 .tr:	clr.w	(a1)
@@ -307,6 +377,8 @@ vbl_video:
 	beq	.width
 	subq.w	#4,d1
 .width:	move.w	d1,bd_vs_pfl
+	movem.l	flip_pal,d0-d7		; (the picture's palette: the maze's; the bar keeps its own)
+	movem.l	d0-d7,shown_pal
 .done:	rts
 
 ; ---------------------------------------------------------------------------------------------------------------------
@@ -337,8 +409,15 @@ render_frame:
 	move.w	d0,snap_xs
 	move.w	d1,snap_ys
 	bsr	scroll_set
-	bsr	mo_snapshot
-	move.l	snap_vbls,d7
+	tst.b	mo_was_general		; (the general walk is dear: its records kept while its input is the same)
+	beq.s	.full
+	bsr	mo_ram_same
+	beq.s	.kept
+.full:	bsr	mo_snapshot
+	tst.b	mo_was_general
+	beq.s	.kept
+	bsr	mo_ram_copy
+.kept:	move.l	snap_vbls,d7
 	cmp.l	rf_vbls,d7
 	beq	.snapped
 	subq.w	#1,snap_tries
@@ -347,8 +426,13 @@ render_frame:
 	bsr	ring_target
 	bsr	pal_update
 	bsr	alpha_update
+	bsr	view_check
 	bsr	bar_update
 	bsr	pf_update
+	bsr	pic_same		; (the ring shows this picture already: nothing to draw)
+	beq	render_done
+	bsr	text_only		; (or all but some opaque characters' lines: only those drawn again)
+	beq	render_done
 	bsr	ovl_build
 	bsr	ovl_classify
 	lea	tr_touch,a0		; (no character row written yet this picture)
@@ -368,10 +452,114 @@ render_frame:
 	bsr	alpha_transparent
 	bsr	ovl_draw
 	bsr	ovl_save
+	move.l	cur_ring,a0		; (what it is drawn of now: pic_same)
+	move.l	al_counter,RS_SAL(a0)
+	move.w	col_epoch,RS_SCOL(a0)
+	move.l	mo_hash,RS_SMO(a0)
+	move.w	#1,RS_SOK(a0)
 	bra	render_done
+
+; pic_same: Z set when the work ring shows this picture already: drawn last at the same place, with no tiles queued
+; for it since, of the same characters (al_counter), colours (col_epoch) and objects (mo_hash, the records' checksum)
+pic_same:
+	lea	mo_recs,a0		; the objects' checksum
+	move.w	mo_n,d1
+	moveq	#0,d0
+	move.w	d1,d0
+	mulu	#MR_SIZE/2,d1
+	bra.s	.hn
+.h:	rol.l	#3,d0
+	add.w	(a0)+,d0
+.hn:	dbf	d1,.h
+	move.l	d0,mo_hash
+	move.l	cur_ring,a0
+	tst.w	RS_SOK(a0)
+	beq.s	.no
+	tst.w	RS_NPEND(a0)
+	bne.s	.no
+	tst.w	RS_POVF(a0)
+	bne.s	.no
+	move.w	RS_W0(a0),d1
+	cmp.w	w0,d1
+	bne.s	.no
+	move.w	RS_F(a0),d1
+	cmp.w	fine,d1
+	bne.s	.no
+	move.w	RS_T(a0),d1
+	cmp.w	top_t,d1
+	bne.s	.no
+	move.l	RS_SAL(a0),d1
+	cmp.l	al_counter,d1
+	bne.s	.no
+	move.w	RS_SCOL(a0),d1
+	cmp.w	col_epoch,d1
+	bne.s	.no
+	cmp.l	RS_SMO(a0),d0
+	rts				; (Z: the same)
+.no:	moveq	#1,d0			; (Z clear)
+	rts
+
+; text_only: Z set when the work ring shows this picture but for lines of opaque characters, now drawn again: as
+; pic_same but the characters (al_counter), no transparent characters, every overlay rectangle kept (the same places:
+; ovl_classify notes the changed lines)
+text_only:
+	move.l	cur_ring,a0
+	tst.w	RS_SOK(a0)
+	beq	.no
+	tst.w	RS_NPEND(a0)
+	bne	.no
+	tst.w	RS_POVF(a0)
+	bne	.no
+	move.w	RS_W0(a0),d1
+	cmp.w	w0,d1
+	bne	.no
+	move.w	RS_F(a0),d1
+	cmp.w	fine,d1
+	bne	.no
+	move.w	RS_T(a0),d1
+	cmp.w	top_t,d1
+	bne	.no
+	move.w	RS_SCOL(a0),d1
+	cmp.w	col_epoch,d1
+	bne	.no
+	move.l	RS_SMO(a0),d1
+	cmp.l	mo_hash,d1
+	bne	.no
+	tst.w	t2_total
+	bne	.no
+	tst.w	RS_TRN(a0)
+	bne	.no
+	bsr	ovl_build
+	bsr	ovl_classify
+	move.l	cur_ring,a3
+	move.w	RS_NOVL(a3),d6
+	cmp.w	new_novl,d6
+	bne	.no
+	lea	RS_OVL(a3),a1
+	bra.s	.on
+.oc:	tst.w	OV_KEEP(a1)
+	beq	.no
+	lea	OV_SIZE(a1),a1
+.on:	dbf	d6,.oc
+	lea	new_ovl,a1
+	move.w	new_novl,d6
+	bra.s	.nn
+.nc:	tst.w	OV_KEEP(a1)
+	beq	.no
+	lea	OV_SIZE(a1),a1
+.nn:	dbf	d6,.nc
+	bsr	ovl_draw
+	bsr	ovl_save
+	move.l	cur_ring,a0
+	move.l	al_counter,RS_SAL(a0)
+	moveq	#0,d0			; (Z set)
+	rts
+.no:	moveq	#1,d0
+	rts
 
 ; scroll_set: the picture's place from the x scroll d0 and the y scroll word d1
 scroll_set:
+	add.w	view_dx,d0		; (the picture's x 0: the arcade's view_dx)
 	and.w	#511,d0
 	move.w	d0,sx
 	moveq	#15,d2
@@ -399,7 +587,9 @@ ring_target:
 	move.w	#STRIDE,tg_stride
 	move.w	#MCOL,tg_pcol
 	move.w	#GUARD,tg_pline
-	move.w	r0px,tg_r0		; (the arcade's x 0)
+	move.w	r0px,d0
+	sub.w	view_dx,d0
+	move.w	d0,tg_r0		; (the arcade's x 0)
 	move.w	top_t,tg_t
 	st	tg_dmg
 	rts
@@ -423,6 +613,12 @@ render_done:
 	add.l	work_base,d0
 	move.l	d0,flip_addr
 	move.b	fine+1,flip_fine
+	move.w	scene_cur,d0		; (its palette: shown with it)
+	lsl.w	#5,d0
+	lea	scene_cols,a0
+	add.w	d0,a0
+	movem.l	(a0),d0-d7
+	movem.l	d0-d7,flip_pal
 	st	frame_ready
 	rts
 
@@ -430,23 +626,126 @@ render_done:
 ; pal_update: the pens $000-$2FF against their copy; a pen whose STE colour (irgb_map) changes is recorded in its
 ; set's mask (48 sets of 16 pens), then the sets are dealt with: tables made again, P's tiles drawn again, the
 ; characters of the alphanumerics colours drawn again, the motion objects' epoch.
+MO_FADE_LONGS = 24			; (more longs of the objects' pens changed at once: a fade, thinned out)
+MO_FADE_EVERY = 8			; (in their every-4th-picture turns: a heavy change every 32nd picture)
+MO_HEAVY_OBJS = 48			; (a change that many objects use: heavy)
 pal_update:
-	lea	ARC_PALETTE,a0
+	addq.w	#1,pal_tick
+	tst.w	scene_hold
+	beq.s	.nh
+	subq.w	#1,scene_hold
+.nh:
+	lea	ARC_PALETTE+$200,a0	; (the objects' and the playfield's changes this picture: large ones noted; most of
+	moveq	#MO_FREEZE,d5		;  the pens at once: another scene, maybe: its palette chosen in the next checks)
+	lea	mo_large,a2
+	bsr	pal_look
+	cmp.w	#MO_FREEZE,d0		; (no large change: still, for the attract pages' objects)
+	bhs.s	.mc0
+	addq.w	#1,mo_still
+	bra.s	.mc1
+.mc0:	clr.w	mo_still
+.mc1:	tst.w	panel_open		; (the panel down: the objects' colours do not change the scene, see below)
+	bne.s	.ma
+	cmp.w	#MO_ARM,d0
+	blo.s	.ma
+	move.w	#SCENE_DUE,scene_due
+	clr.w	scene_quiet
+.ma:	lea	ARC_PALETTE+$400,a0
+	moveq	#PF_FREEZE,d5
+	lea	pf_large,a2
+	bsr	pal_look
+	cmp.w	#PF_ARM,d0
+	blo.s	.pa
+	move.w	#SCENE_DUE,scene_due
+	clr.w	scene_quiet
+	bra.s	.pq
+.pa:	addq.w	#1,scene_quiet		; (the pictures since the last large change)
+.pq:
+	lea	ARC_PALETTE,a0		; the text's pens: always
 	lea	pal_shadow,a1
-	move.w	#768/2,d4
-.cmp:	bsr	cmp_run
-	beq	.sets
-	move.l	-4(a0),-4(a1)
-	move.l	a0,d0
-	sub.l	#ARC_PALETTE+4,d0
-	lsr.w	#1,d0			; the first pen of the two
-	lea	-4(a0),a2
-	bsr	pen_new
+	move.w	#256/2,d4
+	bsr	pal_range
+	tst.w	panel_open		; the objects' colours, the panel down (the title): taken once they are still
+	beq.s	.mup			; for MO_STILL pictures, then held until the panel comes up (the title's fades and
+	st	mo_down			; its logo's colour cycling left out)
+	tst.b	mo_held
+	bne	.nomo
+	cmp.w	#MO_STILL,mo_still
+	blo	.nomo
+	st	mo_held
+	move.w	#SCENE_DUE,scene_due	; (its palette chosen now, from these colours)
+	move.w	#SCENE_QUIET,scene_quiet
+	lea	ARC_PALETTE+$200,a0
+	lea	pal_shadow+$200,a1
+	move.w	#256/2,d4
+	bsr	pal_range
+	bra	.nomo
+.mup:	sf	mo_held			; the panel up: every 4th picture, a fade every 8th
+	tst.b	mo_down			; (just up: all of them at once)
+	beq.s	.mu1
+	sf	mo_down
+	lea	ARC_PALETTE+$200,a0
+	lea	pal_shadow+$200,a1
+	move.w	#256/2,d4
+	bsr	pal_range
+	bra	.nomo
+.mu1:	moveq	#3,d0
+	and.w	pal_tick,d0
+	bne	.nomo
+	lea	ARC_PALETTE+$200,a0
+	lea	pal_shadow+$200,a1
+	moveq	#0,d0			; the changed longs
+	moveq	#0,d2			; the changed sets
+	moveq	#0,d3			; the set
+.ms:	moveq	#8-1,d1
+.mc:	cmpm.l	(a0)+,(a1)+
+	beq.s	.me
 	addq.w	#1,d0
-	addq.l	#2,a2
-	bsr	pen_new
-	tst.w	d4
-	bne	.cmp
+	bset	d3,d2
+.me:	dbf	d1,.mc
+	addq.w	#1,d3
+	cmp.w	#16,d3
+	blo.s	.ms
+	tst.w	d2
+	beq	.nomo
+	cmp.w	#MO_FADE_LONGS,d0	; a fade, or a change that makes many objects baked again: heavy
+	bhi.s	.heavy
+	lea	mo_recs,a0
+	move.w	mo_n,d1
+	moveq	#0,d0
+	bra.s	.on
+.oc:	moveq	#15,d3
+	and.w	MR_W1(a0),d3
+	btst	d3,d2
+	beq.s	.on0
+	addq.w	#1,d0
+.on0:	lea	MR_SIZE(a0),a0
+.on:	dbf	d1,.oc
+	cmp.w	#MO_HEAVY_OBJS,d0
+	bls	.mo
+.heavy:	addq.w	#1,mo_fade_ctr
+	cmp.w	#MO_FADE_EVERY,mo_fade_ctr
+	blo	.nomo
+.mo:	clr.w	mo_fade_ctr
+	lea	ARC_PALETTE+$200,a0
+	lea	pal_shadow+$200,a1
+	move.w	#256/2,d4
+	lea	mo_large,a2
+	bsr	pal_range_frz
+.nomo:	moveq	#3,d0			; the playfield's: every 4th picture (its colour cycling)
+	and.w	pal_tick,d0
+	bne	.nopf
+	lea	ARC_PALETTE+$400,a0
+	lea	pal_shadow+$400,a1
+	move.w	#256/2,d4
+	lea	pf_large,a2
+	bsr	pal_range_frz
+.nopf:	tst.w	scene_due		; the scene: after a large change, once the colours were still for 8 pictures
+	beq	.sets			; (a fade's dim steps do not choose), then every 8th picture while due
+	cmp.w	#SCENE_QUIET,scene_quiet
+	blo	.sets
+	clr.w	scene_quiet
+	bsr	scene_check
 .sets:	lea	set_mask,a4
 	moveq	#0,d7			; the set
 .set:	move.w	(a4),d6
@@ -458,12 +757,130 @@ pal_update:
 	cmp.w	#48,d7
 	blo	.set
 	rts
-; pen d0.w's word at (a2): its STE colour; a change goes into set_mask.  Keeps d0/d6/a0-a2.
+; pal_range_frz: as pal_range, but colour cycling left out: unless a large change came since its last call (the byte at
+; a2: pal_look notes it), only the pens that were dark (no brightness or no colour: not yet shown) are taken; the others
+; keep their colours (their copies stay different: a large change later takes them too).  The first picture takes all.
+MO_ARM = 48				; (longs changed in one picture that make the scene check look: another scene, maybe)
+MO_STILL = 16				; (the panel down: pictures without a large change of the objects' colours before
+					;  they are taken, once)
+PF_ARM = 32
+MO_FREEZE = 16				; (longs of the objects' pens changed in one picture: more is a large change; the title's
+PF_FREEZE = 8				;  shimmer is less) (the playfield's: its flickering and pulsing pens are less)
+pal_range_frz:
+	tst.w	pal_tick
+	beq	pal_range
+	tst.b	(a2)
+	beq.s	.small
+	sf	(a2)
+	move.w	#SCENE_DUE,scene_due	; (a new scene, maybe: its palette chosen in the next checks)
+	bra	pal_range		; (a large change: every pen)
+.small:	move.w	d4,d6
+	add.w	d6,d6
+	subq.w	#1,d6
+.p:	move.w	(a0),d1
+	cmp.w	(a1),d1
+	beq.s	.x
+	move.w	(a1),d1			; the pen it had: dark?
+	move.w	d1,d2
+	and.w	#$f000,d2
+	beq.s	.take
+	and.w	#$0fff,d1
+	bne.s	.x
+.take:	move.w	(a0),(a1)
+	move.l	a0,d0
+	sub.l	#ARC_PALETTE,d0
+	lsr.w	#1,d0
+	move.l	a0,a2
+	movem.l	d6/a0-a1,-(sp)
+	bsr	pen_new
+	movem.l	(sp)+,d6/a0-a1
+.x:	addq.l	#2,a0
+	addq.l	#2,a1
+	dbf	d6,.p
+	rts
+
+; pal_look: (every picture) the longs of 256 pens at a0 changed since the last picture (pal_seen at the same offset),
+; noted: d0.w; d5.w or more: a large change, the byte at a2 set
+pal_look:
+	move.l	a0,d0
+	sub.l	#ARC_PALETTE,d0
+	lea	pal_seen,a1
+	add.l	d0,a1
+	moveq	#0,d0
+	move.w	#256/2-1,d1
+.n:	cmpm.l	(a0)+,(a1)+
+	beq.s	.e
+	move.l	-4(a0),-4(a1)
+	addq.w	#1,d0
+.e:	dbf	d1,.n
+	cmp.w	d5,d0
+	blo.s	.x
+	st	(a2)
+.x:	rts				; (d0: the changed longs)
+
+; pal_range: d4.w longs of pens at a0 against their copy at a1: a changed pen mapped again (pen_new)
+pal_range:
+.cmp:	bsr	cmp_run
+	beq	.x
+	move.l	-4(a0),-4(a1)
+	move.l	a0,d0
+	sub.l	#ARC_PALETTE+4,d0
+	lsr.w	#1,d0			; the first pen of the two
+	lea	-4(a0),a2
+	bsr	pen_new
+	addq.w	#1,d0
+	addq.l	#2,a2
+	bsr	pen_new
+	tst.w	d4
+	bne	.cmp
+.x:	rts
+
+; pen d0.w's word at (a2): its 4-bit RGB (pen_rgb) and its STE colour in the scene's palette; a change goes into
+; set_mask.  Keeps d0/d4/d6/a0-a2.
 pen_new:
-	moveq	#0,d1
 	move.w	(a2),d1
-	lea	irgb_map,a3
-	move.b	(a3,d1.l),d1
+	lea	ir4,a3
+	move.w	d1,d2
+	lsr.w	#8,d2			; I << 4 | R
+	moveq	#0,d3
+	move.b	(a3,d2.w),d3
+	lsl.w	#8,d3			; R
+	and.w	#$f0,d2			; I << 4
+	move.w	d1,d7
+	lsr.w	#4,d7
+	and.w	#15,d7
+	or.w	d2,d7
+	moveq	#0,d5
+	move.b	(a3,d7.w),d5
+	lsl.w	#4,d5
+	or.w	d5,d3			; G
+	move.w	d1,d7
+	and.w	#15,d7
+	or.w	d2,d7
+	move.b	(a3,d7.w),d5
+	and.w	#15,d5
+	or.w	d5,d3			; B: the 4-bit RGB
+	lea	pen_rgb,a3
+	move.w	d0,d5
+	add.w	d5,d5
+	move.w	d3,(a3,d5.w)
+	cmp.w	#$100,d0		; a text pen: its colour in the status bar's palette too
+	bhs.s	.nb
+	lea	bar_idx,a3
+	move.b	(a3,d3.w),d5
+	lea	bar_pmap,a3
+	cmp.b	(a3,d0.w),d5
+	beq.s	.nb
+	move.b	d5,(a3,d0.w)
+	move.w	d0,d5
+	lsr.w	#2,d5			; (its text colour: its table made again, its cells drawn again)
+	lea	balut_ok,a3
+	sf	(a3,d5.w)
+	lea	bar_col,a3
+	st	(a3,d5.w)
+	st	bar_dirty
+.nb:	move.l	scene_idx_p,a3
+	move.b	(a3,d3.w),d1
 	lea	pen_map,a3
 	cmp.b	(a3,d0.w),d1
 	beq	.same
@@ -479,10 +896,242 @@ pen_new:
 	move.w	d3,(a3,d1.w)
 .same:	rts
 
+; scene_check: every scene palette's score on what the picture shows: the sum over the sets in use of their weight x
+; the error (scene_err) of their 16 pens' colours (pen_rgb): the playfield's palettes by their tiles in the window, the
+; text's colours (4 pens) by their shown characters, the objects' palettes by 48 x their objects.  A scene that scores
+; a fifth below the current one in two checks in a row becomes the current one (scene_switch): only palettes of the
+; picture's kind (fitted with the side panel up or down; one of the other kind is left at once), and not again within
+; SCENE_HOLD pictures.  Only in the
+; SCENE_DUE checks after a large colour change (a new level, page or fade): in steady play the palette stays.
+SCENE_DUE = 3				; (the checks after a large colour change: else the palette stays)
+SCENE_QUIET = 8				; (pictures without a large change before a check)
+scene_check:
+	tst.w	scene_due
+	beq	.none
+	subq.w	#1,scene_due
+	lea	sc_score,a0
+	moveq	#SCENE_N-1,d0
+.cl:	clr.l	(a0)+
+	dbf	d0,.cl
+	lea	sc_w,a0			; the weights: 8 playfield, 64 text, 16 object sets
+	moveq	#(8+64+16)/2-1,d0
+.cw:	clr.l	(a0)+
+	dbf	d0,.cw
+	; the playfield's tiles in the window: 41 columns from sx >> 3, 31 rows from sy >> 3 (mod 64)
+	lea	ARC_VRAM,a0
+	lea	sc_w,a1
+	move.w	sx,d6
+	lsr.w	#3,d6
+	moveq	#41-1,d5
+.pc:	and.w	#63,d6
+	move.w	d6,d4
+	lsl.w	#7,d4			; (the column's 64 words)
+	move.w	sy,d3
+	lsr.w	#3,d3
+	moveq	#31-1,d2
+.pr:	and.w	#63,d3
+	move.w	d3,d0
+	add.w	d0,d0
+	add.w	d4,d0
+	move.w	(a0,d0.w),d0
+	rol.w	#4,d0
+	and.w	#7,d0
+	add.w	d0,d0
+	addq.w	#1,(a1,d0.w)
+	addq.w	#1,d3
+	dbf	d2,.pr
+	addq.w	#1,d6
+	dbf	d5,.pc
+	; the text: rows 0-29, columns 0-41, a cell with a character or opaque
+	lea	ARC_VRAM+$5000,a0
+	lea	sc_w+16,a1
+	moveq	#30-1,d5
+.ar:	moveq	#42-1,d4
+	move.l	a0,a2
+.ac:	move.w	(a2)+,d0
+	move.w	d0,d1
+	and.w	#$83ff,d1		; (opaque or a character)
+	beq.s	.an
+	move.w	d0,d1
+	lsr.w	#8,d1
+	lsr.w	#2,d1
+	and.w	#$0f,d1
+	btst	#14,d0
+	beq.s	.a1
+	or.w	#$20,d1
+.a1:	add.w	d1,d1
+	addq.w	#1,(a1,d1.w)
+.an:	dbf	d4,.ac
+	lea	128(a0),a0
+	dbf	d5,.ar
+	; the objects: per palette, 48 x the records (an object of ~6 tiles, its pixels weighing 8 times: the players and
+	; the monsters matter most; as ref/scene_palettes.py's OBJECT_WEIGHT)
+	lea	mo_recs,a0
+	lea	sc_w+16+128,a1
+	move.w	mo_n,d1
+	bra.s	.mn
+.mr:	moveq	#15,d0
+	and.w	MR_W1(a0),d0
+	add.w	d0,d0
+	add.w	#48,(a1,d0.w)
+	lea	MR_SIZE(a0),a0
+.mn:	dbf	d1,.mr
+	; the scores
+	moveq	#0,d6			; the playfield: 8 palettes, P's pens $280-$2FF
+.pf:	lea	sc_w,a0
+	move.w	d6,d0
+	add.w	d0,d0
+	move.w	(a0,d0.w),d5
+	beq.s	.px
+	move.w	d6,d0
+	lsl.w	#4,d0
+	add.w	#$280,d0
+	moveq	#16,d1
+	bsr	sc_set
+.px:	addq.w	#1,d6
+	cmp.w	#8,d6
+	blo.s	.pf
+	moveq	#0,d6			; the text: 64 colours, 4 pens from pen 0
+.al:	lea	sc_w+16,a0
+	move.w	d6,d0
+	add.w	d0,d0
+	move.w	(a0,d0.w),d5
+	beq.s	.an2
+	move.w	d6,d0
+	lsl.w	#2,d0
+	moveq	#4,d1
+	bsr	sc_set
+.an2:	addq.w	#1,d6
+	cmp.w	#64,d6
+	blo.s	.al
+	moveq	#0,d6			; the objects: 16 palettes from pen $100
+.mo:	lea	sc_w+16+128,a0
+	move.w	d6,d0
+	add.w	d0,d0
+	move.w	(a0,d0.w),d5
+	beq.s	.mx
+	move.w	d6,d0
+	lsl.w	#4,d0
+	add.w	#$100,d0
+	moveq	#16,d1
+	bsr	sc_set
+.mx:	addq.w	#1,d6
+	cmp.w	#16,d6
+	blo.s	.mo
+	; the best of the palettes of the picture's kind (fitted to scenes with the side panel up, or down)
+	tst.w	panel_open
+	seq	d5			; (the panel up)
+	and.b	#1,d5
+	lea	scene_panel,a1
+	lea	sc_score,a0
+	moveq	#-1,d0			; its scene
+	moveq	#-1,d1			; its score
+	moveq	#0,d2
+.b:	cmp.w	#SCENE_N,d2
+	bhs.s	.bd
+	cmp.b	(a1,d2.w),d5
+	bne.s	.bn
+	move.w	d2,d3
+	lsl.w	#2,d3
+	cmp.l	(a0,d3.w),d1
+	bls.s	.bn
+	move.l	(a0,d3.w),d1
+	move.w	d2,d0
+.bn:	addq.w	#1,d2
+	bra.s	.b
+.bd:	tst.w	d0
+	bmi.s	.none			; (none of that kind)
+	cmp.w	scene_cur,d0
+	beq.s	.none
+	move.w	scene_cur,d3		; (the current one of the other kind: change at once)
+	cmp.b	(a1,d3.w),d5
+	bne	scene_switch
+	tst.w	scene_hold		; (changed a while ago: it stays)
+	bne.s	.none
+	move.w	scene_cur,d3		; a fifth better: best < current - current / 5 (checks run only after a scene change)
+	lsl.w	#2,d3
+	move.l	(a0,d3.w),d2
+	move.l	d2,d3
+	lsr.l	#3,d3			; (current / 8 + current / 16 + current / 128 ~ / 5)
+	move.l	d3,d4
+	lsr.l	#1,d4
+	add.l	d4,d3
+	lsr.l	#3,d4
+	add.l	d4,d3
+	sub.l	d3,d2
+	cmp.l	d2,d1
+	bhs.s	.none
+	cmp.w	sc_cand,d0		; (the same in the check before: change)
+	beq	scene_switch
+	move.w	d0,sc_cand
+	rts
+.none:	move.w	#-1,sc_cand
+	rts
+
+; sc_set: weight d5.w of d1.w pens from pen d0.w added to every scene's score (sc_score).  Keeps d6.
+sc_set:
+	lea	pen_rgb,a1
+	add.w	d0,d0
+	add.w	d0,a1			; the pens' colours
+	lea	scene_err,a2
+	lea	sc_score,a3
+	moveq	#SCENE_N-1,d4
+.k:	moveq	#0,d2			; the set's error in this scene
+	move.l	a1,a4
+	move.w	d1,d3
+	subq.w	#1,d3
+.p:	move.w	(a4)+,d0
+	moveq	#0,d7
+	move.b	(a2,d0.w),d7
+	add.w	d7,d2
+	dbf	d3,.p
+	mulu	d5,d2
+	add.l	d2,(a3)+
+	lea	4096(a2),a2
+	dbf	d4,.k
+	rts
+
+; scene_switch: scene d0.w the current one: its table, its palette (with the next picture), every pen mapped again;
+; held for SCENE_HOLD pictures (a scene's own colour changes, the title logo's, do not change it again)
+SCENE_HOLD = 256
+scene_switch:
+	move.w	d0,scene_cur
+	move.w	#SCENE_HOLD,scene_hold
+	moveq	#0,d1
+	move.w	d0,d1
+	moveq	#12,d2
+	lsl.l	d2,d1
+	add.l	#scene_idx,d1
+	move.l	d1,scene_idx_p
+	move.l	d1,a3
+	lea	pen_rgb,a0
+	lea	pen_map,a1
+	lea	set_mask,a2
+	moveq	#0,d0			; the pen
+.p:	move.w	(a0)+,d1
+	move.b	(a3,d1.w),d1
+	cmp.b	(a1,d0.w),d1
+	beq.s	.n
+	move.b	d1,(a1,d0.w)
+	move.w	d0,d1
+	lsr.w	#4,d1
+	add.w	d1,d1
+	moveq	#15,d2
+	and.w	d0,d2
+	move.w	(a2,d1.w),d3
+	bset	d2,d3
+	move.w	d3,(a2,d1.w)
+.n:	addq.w	#1,d0
+	cmp.w	#768,d0
+	blo.s	.p
+	addq.w	#1,scene_switches
+	rts
+
 ; set_changed: set d7 (pens 16 d7 ..) changed the pens d6.  Keeps d7/a4.
 set_changed:
 	cmp.w	#16,d7
-	blo	al_set_changed
+	blo	al_set_changed		; (the text's: drawn again as characters, al_counter)
+	addq.w	#1,col_epoch		; (the objects' or the playfield's colours changed: pic_same, text_only)
 	cmp.w	#32,d7
 	blo	.mo
 	; the playfield: 32-39 the shadow sets (P'), 40-47 the sets (P)
@@ -930,7 +1579,7 @@ tile_rows:
 	rts
 
 ; pf_recolour: playfield palette d0.w's pens d1.w map to other colours (in P: d2 = 1, P': d2 = 0): the copies of its
-; listed tiles that use them made to differ (pf_update draws them again into P and P' when they are in the window, at
+; listed tiles that P holds in it (pf_shadow: the word last drawn) and that use them made to differ (pf_update draws them again into P and P' when they are in the window, at
 ; once or when the window comes there).  Keeps d7/a4.
 pf_recolour:
 	movem.l	d7/a4,-(sp)
@@ -948,7 +1597,7 @@ pf_recolour:
 	add.l	d0,a3
 	bra	.next
 .ent:	move.w	(a3)+,d3		; the index
-	lea	ARC_VRAM,a0
+	lea	pf_shadow,a0		; (the word P holds: the video RAM's may have changed and changed back since)
 	move.w	d3,d0
 	add.w	d0,d0
 	move.w	(a0,d0.w),d0
@@ -956,7 +1605,7 @@ pf_recolour:
 	rol.w	#4,d1
 	and.w	#7,d1
 	cmp.w	d6,d1
-	bne	.next			; (no longer of this palette)
+	bne	.next			; (P holds it in another palette, or it is to be drawn again anyway)
 	and.w	#$0fff,d0		; the code's pens
 	move.w	bank,d1
 	ror.w	#4,d1
@@ -1041,9 +1690,11 @@ alpha_update:
 	bra	runs_update
 ; arcade column d0.w of row d7.w: the character drawn again (columns 40 and 41 are not shown)
 al_column:
+	sub.w	view_col,d0		; (k)
+	bmi	.no
 	cmp.w	#40,d0
 	bhs	.no
-	bra	al_char			; (k: the same)
+	bra	al_char
 .no:	rts
 
 ; al_char: the character k = d0.w of row d7.w drawn into AIMG (or noted as empty); its row's version bumped.
@@ -1054,7 +1705,8 @@ al_char:
 	add.w	d0,d1
 	move.w	d1,d5			; the position (row * 40 + k)
 	move.w	d0,d4			; k
-	move.w	d4,d1			; the arcade column
+	move.w	d4,d1
+	add.w	view_col,d1		; the arcade column
 	move.w	d7,d0
 	lsl.w	#6,d0
 	add.w	d1,d0
@@ -1082,8 +1734,10 @@ al_char:
 .t:	lea	al_type,a0
 	move.b	(a0,d5.w),d0
 	move.b	d6,(a0,d5.w)
-	cmp.w	#29,d4			; the panel: its characters not opaque counted
+	cmp.w	#29,d1			; the panel (the arcade's columns 29-39): its characters not opaque counted
 	blo	.tp
+	cmp.w	#39,d1
+	bhi	.tp
 	cmp.b	#1,d0
 	beq	.tp0
 	subq.w	#1,panel_open
@@ -1209,6 +1863,7 @@ bar_update:
 	sf	bar_dirty
 	ifd SHOWFPS
 	move.w	#-1,fps_shown
+	move.w	#-1,fps_scene
 	endc
 	rts
 .same:	tst.b	bar_shown
@@ -1269,7 +1924,14 @@ bar_update:
 	add.w	#$8030,d3
 	move.w	#27*AL+(20>>1)*8+(20&1),d1
 	bsr	bar_put
-.nf:
+.nf:	move.w	scene_cur,d3		; (and the scene palette: 22)
+	cmp.w	fps_scene,d3
+	beq	.ns
+	move.w	d3,fps_scene
+	add.w	#$8030,d3
+	move.w	#27*AL+(22>>1)*8+(22&1),d1
+	bsr	bar_put
+.ns:
 	endc
 	rts
 
@@ -1285,7 +1947,15 @@ bar_put:
 	btst	#14,d3
 	beq	.c
 	or.w	#$20,d2
-.c:	lea	ALUTS,a2
+.c:	lea	balut_ok,a2		; the colour's table in the bar's palette (made when its pens changed)
+	tst.b	(a2,d2.w)
+	bne.s	.ok
+	st	(a2,d2.w)
+	movem.l	d1-d3/a1/a3,-(sp)
+	move.w	d2,d0
+	bsr	balut_build
+	movem.l	(sp)+,d1-d3/a1/a3
+.ok:	lea	BALUTS,a2
 	moveq	#10,d0
 	lsl.l	d0,d2
 	add.l	d2,a2			; the colour's table
@@ -1338,6 +2008,22 @@ al_set_changed:
 	movem.l	(sp)+,d7/a4
 	rts
 
+; balut_build: colour d0.w's table for the status bar (BALUTS: as alut_build, the pens' colours in the bar's palette,
+; bar_pmap).  Uses d0-d4/a0-a3.
+balut_build:
+	lea	BALUTS,a1
+	moveq	#0,d1
+	move.w	d0,d1
+	moveq	#10,d2
+	lsl.l	d2,d1
+	add.l	d1,a1
+	lea	bar_pmap,a3
+	add.w	d0,a3
+	add.w	d0,a3
+	add.w	d0,a3
+	add.w	d0,a3			; its 4 pens
+	bra	alut_from
+
 ; alut_build: colour d0.w's table: [b] = the plane nibbles of the four 2-bit pixels of b (the first the highest bit):
 ; [hi << 4 | lo] = pairs_hi[hi] | pairs_lo[lo]
 alut_build:
@@ -1352,6 +2038,7 @@ alut_build:
 	add.w	d0,a3
 	add.w	d0,a3
 	add.w	d0,a3			; its 4 pens
+alut_from:				; (a1 the table, a3 the 4 pens' colours)
 	lea	spread4,a0
 	lea	lut_tmp,a2
 	moveq	#4-1,d3			; s[4]
@@ -2336,7 +3023,8 @@ tr_restore:
 
 ; al_trans_char: character k = d6 of row d7 (its pixels from AIMG, its mask from the character's pixels not 0)
 al_trans_char:
-	move.w	d6,d0			; the arcade column
+	move.w	d6,d0
+	add.w	view_col,d0		; the arcade column
 	move.w	d7,d1
 	lsl.w	#6,d1
 	add.w	d1,d0
@@ -2446,6 +3134,7 @@ IMG_HDR = 8
 MO_HASH_N = 2048
 
 mo_snapshot:
+	sf	mo_was_general
 	clr.w	mo_n
 	addq.w	#1,mo_pstamp
 	bne	.ps
@@ -2617,6 +3306,45 @@ mo_snapshot:
 	bra	.r
 .done:	rts
 
+; mo_ram_same: Z set when the objects' RAM ($2000-$3FFF), the SLIPs and the scroll equal mo_copy (the general walk's
+; input last time).  mo_ram_copy: they copied there.
+MO_COPY_LONGS = ($2000+$80)/4+1
+mo_ram_same:
+	lea	mo_copy,a1
+	move.w	snap_xs,d0
+	swap	d0
+	move.w	snap_ys,d0
+	cmp.l	(a1)+,d0
+	bne.s	.x
+	lea	ARC_VRAM+$2000,a0
+	move.w	#$2000/4-1,d1
+.c:	cmpm.l	(a0)+,(a1)+
+	dbne	d1,.c
+	bne.s	.x
+	lea	ARC_VRAM+$5F80,a0
+	moveq	#$80/4-1,d1
+.s:	cmpm.l	(a0)+,(a1)+
+	dbne	d1,.s
+.x:	rts
+mo_ram_copy:
+	lea	mo_copy,a1
+	move.w	snap_xs,d0
+	swap	d0
+	move.w	snap_ys,d0
+	move.l	d0,(a1)+
+	lea	ARC_VRAM+$2000,a0
+	move.w	#$2000/16-1,d1
+.c:	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	dbf	d1,.c
+	lea	ARC_VRAM+$5F80,a0
+	moveq	#$80/4-1,d1
+.s:	move.l	(a0)+,(a1)+
+	dbf	d1,.s
+	rts
+
 ; mo_front_walk: band start d1 is not on the chain: walked until an entry of the chain; when that is the chain's
 ; first entry, the walked ones go in front of it (Z set), else Z clear.  Keeps d5/d7/a0-a2/a4/a5.
 mo_front_walk:
@@ -2663,6 +3391,7 @@ mo_front_walk:
 
 ; mo_general: every visible band walked from its SLIP entry; each object's rows in the band
 mo_general:
+	st	mo_was_general
 	clr.w	mo_n
 	lea	mo_recs,a6
 	moveq	#0,d7			; k
@@ -2778,9 +3507,11 @@ mo_place:
 	sub.w	#512,d2
 .x:	move.w	d2,d0
 	add.w	d4,d0			; its right end
-	tst.w	d0
+	cmp.w	view_dx,d0
 	ble	.no2
-	cmp.w	#320,d2			; (the picture: the arcade's x 0-319)
+	move.w	d2,d0
+	sub.w	view_dx,d0
+	cmp.w	#320,d0			; (the picture: the arcade's x view_dx .. + 319)
 	bge	.no2
 .yes:	move.w	(sp)+,d4
 	moveq	#1,d0			; (Z clear)
@@ -4261,8 +4992,15 @@ sblit:
 	section	data,data
 	even
 bar_map:	incbin	"bar_map.bin"	; (tools/bar.py: per cell its alphanumerics word, its byte in BIMG)
-palette_data:	incbin	"palette.bin"
-irgb_map:	incbin	"irgb_map.bin"
+ir4:		incbin	"ir4.bin"	; [I << 4 | C]: a pen's 4-bit channel
+scene_cols:	incbin	"scene_cols.bin"	; SCENE_N x 16 STE colours
+scene_idx:	incbin	"scene_idx.bin"	; SCENE_N x 4096: 4-bit RGB -> the palette's colour
+scene_err:	incbin	"scene_err.bin"	; SCENE_N x 4096: its error (scene_check)
+scene_panel:	incbin	"scene_panel.bin"	; per scene: 1 fitted to scenes with the panel up
+	even
+bar_cols:	incbin	"bar_cols.bin"	; the status bar's 16 colours
+bar_idx:	incbin	"bar_idx.bin"	; 4096: 4-bit RGB -> the bar's colour
+	even
 tile_px:	incbin	"tile_px.bin"
 tile_pens:	incbin	"tile_pens.bin"
 tile_masks:	incbin	"tile_masks.bin"
@@ -4296,6 +5034,8 @@ runs_version:	ds.w	1
 ob_runs_v:	ds.w	1
 ob_r0px:	ds.w	1
 panel_open:	ds.w	1
+view_dx:	ds.w	1		; (the arcade's x at the picture's x 0: 0, or 8 while the panel is down)
+view_col:	ds.w	1		; (view_dx / 8)
 tr_touch:	ds.b	30		; (the character rows written this picture: touch)
 tr_on:		ds.b	1
 	even
@@ -4314,6 +5054,7 @@ bar_all:	ds.b	1
 bar_col:	ds.b	64		; (al_set_changed: the alphanumerics colours whose pens changed)
 	ifd SHOWFPS
 fps_shown:	ds.w	1
+fps_scene:	ds.w	1
 	endc
 tg_stride:	ds.w	1
 tg_pcol:	ds.w	1
@@ -4395,7 +5136,36 @@ runs_dirty:	ds.b	30
 row_t2:		ds.b	30
 	even
 pen_map:	ds.b	768
+	even
+pen_rgb:	ds.w	768		; (each pen's 4-bit RGB, as pen_new saw it)
+bar_pmap:	ds.b	256		; (each text pen's colour in the bar's palette)
+balut_ok:	ds.b	64		; (the text colours whose bar table is made)
+BALUTS:		ds.b	64*1024		; (per text colour: its table in the bar's palette, as ALUTS)
+flip_pal:	ds.w	16		; (the published picture's palette)
+sc_score:	ds.l	SCENE_N
+sc_w:		ds.w	8+64+16		; (scene_check's weights)
+sc_cand:	ds.w	1
+scene_due:	ds.w	1		; (scene_check: the checks left after a large colour change)
+scene_quiet:	ds.w	1		; (the pictures since the last large colour change)
+scene_hold:	ds.w	1		; (pictures left before the palette may change again within its kind)
+mo_still:	ds.w	1		; (pictures without a large change of the objects' colours)
+mo_held:	ds.b	1		; (the panel down: the objects' colours taken, held until it comes up)
+mo_down:	ds.b	1		; (the panel was down: the objects' colours all taken when it comes up)
+	even
+scene_idx_p:	ds.l	1
+scene_cur:	ds.w	1
+scene_switches:	ds.w	1
+pal_tick:	ds.w	1
+mo_fade_ctr:	ds.w	1
+col_epoch:	ds.w	1
+mo_hash:	ds.l	1
+mo_was_general:	ds.b	1
+	even
+mo_copy:	ds.l	MO_COPY_LONGS	; (mo_ram_same: the general walk's input)
 pal_shadow:	ds.w	768
+pal_seen:	ds.w	768		; (pal_look: the pens as the last picture saw them)
+mo_large:	ds.b	1		; (pal_look: a large change of the objects' pens since they were taken)
+pf_large:	ds.b	1		; (and of the playfield's)
 pf_shadow:	ds.w	4096
 al_dirty:	ds.b	1		; the alphanumerics written since they were compared (gauntlet.s's hooks)
 	even

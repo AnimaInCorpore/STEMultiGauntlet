@@ -1,6 +1,6 @@
 """The STE picture (src/render.s in a SIM harness, src/render_test.s, on engine/sim.py: Musashi + the Blitter model)
-against the reference picture (tools/video.py) through the fixed palette (tools/assets.py Oracle), pixel for pixel on
-the colour indices.
+against the reference picture (tools/video.py) through the STE's own pen map (the scene palette it chose, the
+colour changes it applied: tools/assets.py Oracle), pixel for pixel on the colour indices.
 
     venv/bin/python games/gauntlet/tools/render_test.py [--seed S] [--level L] [--frames N] [--first F] [--every K]
                                                          [--save DIR] [--profile] [--nobuild]
@@ -175,6 +175,14 @@ class Harness:
         fine = mem.r8(sym["flip_fine"])
         return ring_pixels(bytes(mem.r_block(base, 240 * STRIDE)), 240, 21)[:, fine:fine + 320]
 
+    def pen_map(self):
+        """the STE's pen -> colour map (768 bytes: the scene it chose, the colour changes it applied)"""
+        return bytes(self.sim.mem.r_block(self.sym["pen_map"], 768))
+
+    def bar_pmap(self):
+        """the STE's text pens' colours in the status bar's palette (256 bytes)"""
+        return bytes(self.sim.mem.r_block(self.sym["bar_pmap"], 256))
+
     def bar(self):
         """the status bar: [BAR_LINES, 320] colour indices"""
         import bar
@@ -222,7 +230,8 @@ def main():
         if checked:
             cyc.append(used)                                # (not the first: init_video, every tile and character)
         got = np.vstack((h.picture(), h.bar()))
-        want = np.vstack((oracle.picture_raw(vram, m.palette(), m.xscroll), oracle.bar(vram, m.palette())))
+        pm = h.pen_map()
+        want = np.vstack((oracle.picture_raw(vram, m.palette(), m.xscroll, pm), oracle.bar(vram, m.palette(), pm, h.bar_pmap())))
         checked += 1
         n = int((got != want).sum())
         if n:

@@ -16,6 +16,16 @@
     sprite_code.s    the motion objects' draw routine (render.s includes it)
     bar_map.bin      the status bar's cells (tools/bar.py): their word in the alphanumerics, their byte in the bar
     bar.i            BAR_N (the cells), BAR_LINES
+    ir4.bin          256 bytes: [I << 4 | C] = the 4-bit channel of an IRGB pen's intensity I and channel C
+    scene_cols.bin   SCENE_N x 16 STE words: the scene palettes (docs/scenes.json, ref/scene_palettes.py; 0: the
+                     general one, docs/palette.json)
+    scene_idx.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> the nearest of the palette's 16 in Oklab
+    scene_err.bin    SCENE_N x 4096 bytes: that distance (Oklab x 400, at most 255): render.s scene_pick's score
+    scenes.i         SCENE_N
+    scene_panel.bin  SCENE_N bytes: 1 when the palette was fitted to scenes with the side panel up (play), else 0
+    bar_cols.bin     16 STE words: the status bar's own palette (docs/scenes.json "bar"; the Timer B loads it at line 240)
+    bar_idx.bin      4096 bytes: an RGB_444 colour -> the nearest of the bar's 16
+    bar_sp.bin       8 x 16 longs: [x][c] the plane bits of colour c at pixel x of a byte (plane k in byte k: movep)
 """
 from pathlib import Path
 import json
@@ -65,6 +75,53 @@ def palette():
     return colours, mapping, np.array(regs, ">u2")
 
 
+def ste_word(c):
+    conv = lambda n: ((int(n) >> 1) & 7) | ((int(n) & 1) << 3)
+    r, g, b = (int(v) // 17 for v in c)
+    return (conv(r) << 8) | (conv(g) << 4) | conv(b)
+
+
+def ir4():
+    """[I << 4 | C] -> the 4-bit channel of MAME's IRGB decoding (I * C, both 4 bits as 8, >> 8), rounded"""
+    return bytes(min(15, int(round(((i * 0x11) * (c * 0x11) >> 8) / 17))) for i in range(16) for c in range(16))
+
+
+def scene_palettes():
+    """[[16 RGB]]: docs/scenes.json's palettes with samples (the first the start's)"""
+    doc = json.loads((DOCS / "scenes.json").read_text())
+    return [np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in p["colours"]])
+            for p in doc["palettes"] if p["samples"]]
+
+
+def scene_tables(dest):
+    pals = scene_palettes()
+    grid = np.array([[r, g, b] for r in range(16) for g in range(16) for b in range(16)]) * 17
+    lab = oklab(grid)
+    cols, idx, err = bytearray(), bytearray(), bytearray()
+    for pal in pals:
+        d = np.sqrt(((lab[:, None] - oklab(pal)[None]) ** 2).sum(2))
+        idx += d.argmin(1).astype(np.uint8).tobytes()
+        err += np.minimum(255, np.round(d.min(1) * 400)).astype(np.uint8).tobytes()
+        cols += np.array([ste_word(c) for c in pal], ">u2").tobytes()
+    (dest / "ir4.bin").write_bytes(ir4())
+    (dest / "scene_cols.bin").write_bytes(bytes(cols))
+    (dest / "scene_idx.bin").write_bytes(bytes(idx))
+    (dest / "scene_err.bin").write_bytes(bytes(err))
+    (dest / "scenes.i").write_text("SCENE_N = %d\n" % len(pals))
+    doc = json.loads((DOCS / "scenes.json").read_text())
+    (dest / "scene_panel.bin").write_bytes(bytes(int(bool(p.get("panel"))) for p in doc["palettes"] if p["samples"]))
+    doc = json.loads((DOCS / "scenes.json").read_text())
+    bar_pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in doc["bar"]["colours"]])
+    d = np.sqrt(((lab[:, None] - oklab(bar_pal)[None]) ** 2).sum(2))
+    (dest / "bar_idx.bin").write_bytes(d.argmin(1).astype(np.uint8).tobytes())
+    (dest / "bar_cols.bin").write_bytes(np.array([ste_word(c) for c in bar_pal], ">u2").tobytes())
+    sp = bytearray()
+    for x in range(8):
+        for c in range(16):
+            sp += bytes((((c >> k) & 1) << (7 - x)) for k in range(4))
+    (dest / "bar_sp.bin").write_bytes(bytes(sp))
+
+
 def sprite_code():
     return ""
 
@@ -97,6 +154,7 @@ def build():
                                          for b in range(256)))
     (dest / "bitrev.bin").write_bytes(bytes(int("{:08b}".format(b)[::-1], 2) for b in range(256)))
     (dest / "sprite_code.s").write_text(sprite_code())
+    scene_tables(dest)
     import bar
     (dest / "bar_map.bin").write_bytes(bar.table())
     (dest / "bar.i").write_text("BAR_N = %d\nBAR_LINES = %d\n" % (len(bar.cells()), bar.BAR_LINES))
@@ -124,14 +182,18 @@ class Oracle:
         self.rgb = np.frombuffer((dest / "palette_rgb.bin").read_bytes(), np.uint8).reshape(16, 3)
         self.video = Video()
 
-    def indices(self, raw, palette_ram):
+    def indices(self, raw, palette_ram, pen_map=None):
+        """pens -> STE colours: through pen_map (768 bytes, the STE's own: the scene it chose) when given, else the
+        general palette's IRGB table"""
+        if pen_map is not None:
+            return np.frombuffer(bytes(pen_map), np.uint8)[raw]
         pens = np.frombuffer(bytes(palette_ram[:0x800]), ">u2").astype(np.int64)
         return self.mapping[pens[raw]]
 
     def picture(self, m):
         return self.picture_raw(m.vram(), m.palette(), m.xscroll)
 
-    def picture_raw(self, vram, palette, xscroll):
+    def picture_raw(self, vram, palette, xscroll, pen_map=None):
         vram = bytes(vram)
         ys = (vram[0x5F6E] << 8) | vram[0x5F6F]
         if panel_shown(vram):
@@ -144,15 +206,18 @@ class Oracle:
                 self.video.alpha = alpha
         else:
             raw = self.video.render_raw(vram, xscroll, ys)
-        return self.indices(raw, palette)[:, :320]
+        x0 = 0 if panel_shown(vram) else 8                                  # (render.s view_check: centred then)
+        return self.indices(raw, palette, pen_map)[:, x0:x0 + 320]
 
-    def bar(self, vram, palette):
+    def bar(self, vram, palette, pen_map=None, bar_map=None):
+        """the status bar: [BAR_LINES, 320] colour indices (in the bar's own palette when bar_map, the STE's 256 text
+        pens' bar colours, is given)"""
         import bar
         out = np.zeros((bar.BAR_LINES, 320), np.uint8)
         if not panel_shown(vram):
             return out
         apix, _ = self.video.alpha(bytes(vram))
-        idx = self.indices(apix, palette)
+        idx = self.indices(apix, palette, bar_map if bar_map is not None else pen_map)
         for y, k, r, c in bar.cells():
             out[y:y + 8, 8 * k:8 * k + 8] = idx[8 * r:8 * r + 8, 8 * c:8 * c + 8]
         return out

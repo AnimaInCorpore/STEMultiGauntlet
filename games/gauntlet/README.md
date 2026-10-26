@@ -19,7 +19,8 @@ with the same patches (equal VBL for VBL, 8000 VBLs, seeds 3 and 12).  Transpare
 "score per coin" pages are made of them) are kept in each ring between pictures: a row is copied back from P and
 drawn again only when it changed, the ring moved, or something else wrote into its lines (`touch` notes the rows):
 those pages 4.1M -> 72-104k cycles a picture, Hatari 1-2 -> 49-50 pictures a second.  Hatari
-(attract mode's demo play): 27 pictures a second, 20 with a message box; a ghost horde now on screen (it was under
+(attract mode's demo play): 27 pictures a second (2026-10-26, with the per-scene palettes: the tables 50, the title
+23-50, demo play 13-45), 20 with a message box; a ghost horde now on screen (it was under
 the panel) costs ~800k cycles a picture (was ~470k).
 
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
@@ -137,15 +138,26 @@ over the playfield and the bar is empty.
 * **Status bar** (`tools/bar.py`, render.s bar_update): per cell the panel's word and the bar's byte; a cell is
   drawn again when its word or its colour's pens change.  Two bands: players 1 | 2 over 3 | 4, each player's values
   and inventory rows whole at the bar's edges, the names next to them, "LEVEL n" in the middle.
-* **Colours**: one fixed palette of 16 (`ref/palette_fit.py`, `docs/palette.json`): weighted k-means in Oklab over the
-  attract mode and play in levels 1-16, 20 and 30 (the level poked at $904004), a colour's weight the square root of
-  its share, the four player colours kept; mean error 4-5 of 255 a channel.  Every IRGB word maps to its nearest
-  colour; when a pen's colour changes, what uses it is drawn again.
+* **Colours**: per-scene palettes of 16 (`ref/scene_palettes.py`, `docs/scenes.json`, compared with the arcade and
+  DawnBringer 16 in `docs/palette_compare.png`): the attract mode and play sampled, object pixels weighted x8, ten
+  palettes (black plus 15 fitted in Oklab), each flagged for pictures with the side panel up (play) or down (the
+  title and the tables).  `scene_check` scores the visible tiles, characters and objects against every palette of
+  the picture's kind and changes palette only after a large colour change, a quiet spell and two checks agreeing,
+  then holds it for 256 pictures.  Every IRGB word maps to its nearest colour of the current palette; when a pen's
+  colour changes, what uses it is drawn again.  Colour cycling and fades are left out: small changes are taken only
+  for dark pens, object colours every 4th picture (heavy fades every 32nd), and while the panel is down the
+  objects' colours are taken once, when they have been still for 16 pictures, and held until the panel comes up, so
+  the title is a static picture in its full colours (no fades, no logo cycling).  The status bar has its own fixed
+  palette of the panel's colours (`bar_cols`, loaded by the Timer B at line 240).
+* **Centring**: while the panel is down the picture shows the arcade's x 8-327 (the title and tables centred on its
+  336 pixels); in play x 0-319 (`view_check`).
 * Every Blitter pass is HOG and at most 256 bus cycles (`BLIT_STATS=256`).
 * **Tests**: `tools/render_test.py`: the STE picture equals the reference picture through the palette, pixel for
   pixel (attract mode, play in any level with `--level`, consecutive pictures in both rings: 4,950 pictures, 0
   differ); `tools/sprite_test.py`: objects at every edge, all 16 shifts, both flips, 1-8 tiles wide, holes and
   shadows, priority, partial band lists, the transparent panel, 64 KB crossings (305 pictures, 0 differ).
+* **Scheduling**: when the renderer has made no picture for 4 VBLs, the game skips a VBL (or is preempted) so the
+  picture catches up (`gauntlet.s`, STARVE).
 * **Speed** (Musashi, CPU + Blitter): 115k-390k cycles a picture in play (median by scenario), about 10-12k an
   object with its restore; the attract mode's title (about 260 fading objects, baked again each picture) is the
   slowest.  The writers' marks (2026-10-26; `render_test.py --first 1300 --frames 1600 --every 1`, 300 pictures):
