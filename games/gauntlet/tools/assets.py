@@ -23,6 +23,8 @@
                      ref/scene_palettes.py)
     scene_idx.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> the nearest of the palette's 16 in Oklab
     scene_err.bin    SCENE_N x 4096 bytes: that distance (Oklab x 400, at most 255): render.s scene_pick's score
+    scene_pab.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> a << 4 | b, the checker pair for the maze and the
+                     objects (checker_pairs; GAUNTLET_DITHER = its contrast weight, 0.25; 0: no checker)
     scenes.i         SCENE_N
     ir4s.bin         256 bytes: ir4 as STE nibbles (the title logo's band colours, render.s band_build)
     scene_panel.bin  SCENE_N bytes: 1 when the palette was fitted to scenes with the side panel up (play), else 0
@@ -97,6 +99,24 @@ def scene_palettes():
             for p in doc["palettes"] if p["samples"]]
 
 
+def checker_pairs(lab, pal, weight, n, near, lam):
+    """4096 bytes: an RGB_444 colour -> a << 4 | b, the two of the palette's first n colours whose checker (mixed in
+    linear light, as a CRT blends neighbouring pixels) matches it best, a pair's own contrast x lam added (a checker of
+    far colours shows as a texture); a == b: one colour.  lam 0: the nearest colour alone."""
+    if lam <= 0:
+        return bytes(int(c) << 4 | int(c) for c in near)
+    lin = lambda c: np.where(c / 255 <= 0.04045, c / 255 / 12.92, ((c / 255 + 0.055) / 1.055) ** 2.4)
+    unlin = lambda l: np.clip(np.where(l <= 0.0031308, l * 12.92, 1.055 * np.maximum(l, 0) ** (1 / 2.4) - 0.055), 0, 1) * 255
+    pairs = [(a, b) for a in range(n) for b in range(a, n)]
+    pl = lin(np.asarray(pal[:n], float))
+    mix = np.array([unlin((pl[a] + pl[b]) / 2) for a, b in pairs])
+    plab = oklab(pal[:n]) * weight
+    contrast = np.array([np.sqrt(((plab[a] - plab[b]) ** 2).sum()) for a, b in pairs])
+    cost = np.sqrt((((lab[:, None] - oklab(mix)[None]) * weight) ** 2).sum(2)) + lam * contrast[None]
+    best = np.array(pairs)[cost.argmin(1)]
+    return bytes(int(a) << 4 | int(b) for a, b in best)
+
+
 def scene_tables(dest):
     pals = scene_palettes()
     doc = json.loads((DOCS / "scenes.json").read_text())
@@ -110,19 +130,23 @@ def scene_tables(dest):
         pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in db] + [[0, 0, 0]])
         pals = [pal] * len(pals)
         weight = np.array([0.5, 1, 1])          # (hue shifts cost more than shading shifts)
-    cols, idx, err = bytearray(), bytearray(), bytearray()
+    lam = float(os.environ.get("GAUNTLET_DITHER", "0.25"))                   # (0: no checker)
+    cols, idx, err, pab = bytearray(), bytearray(), bytearray(), bytearray()
     for pal, up in zip(pals, panel):
         d = np.sqrt((((lab[:, None] - oklab(pal)[None]) * weight) ** 2).sum(2))
         if not up or target:
             d[:, 15] = np.inf                                               # (the title logo's band: render.s BAND_COL)
-        idx += d.argmin(1).astype(np.uint8).tobytes()
+        near = d.argmin(1)
+        idx += near.astype(np.uint8).tobytes()
         err += np.minimum(255, np.round(d.min(1) * 400)).astype(np.uint8).tobytes()
+        pab += checker_pairs(lab, pal, weight, 15 if (not up or target) else 16, near, lam)
         cols += np.array([ste_word(c) for c in pal], ">u2").tobytes()
     (dest / "ir4.bin").write_bytes(ir4())
     (dest / "ir4s.bin").write_bytes(bytes((c >> 1) | ((c & 1) << 3) for c in ir4()))   # (as an STE nibble: the band)
     (dest / "scene_cols.bin").write_bytes(bytes(cols))
     (dest / "scene_idx.bin").write_bytes(bytes(idx))
     (dest / "scene_err.bin").write_bytes(bytes(err))
+    (dest / "scene_pab.bin").write_bytes(bytes(pab))
     (dest / "scenes.i").write_text("SCENE_N = %d\n" % len(pals))
     (dest / "scene_panel.bin").write_bytes(bytes(int(up) for up in panel))
     bar_pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in doc["bar"]["colours"]])
@@ -207,7 +231,7 @@ class Oracle:
     def picture(self, m):
         return self.picture_raw(m.vram(), m.palette(), m.xscroll)
 
-    def picture_raw(self, vram, palette, xscroll, pen_map=None):
+    def picture_raw(self, vram, palette, xscroll, pen_map=None, pen_pab=None):
         vram = bytes(vram)
         ys = (vram[0x5F6E] << 8) | vram[0x5F6F]
         if panel_shown(vram):
@@ -221,6 +245,10 @@ class Oracle:
         else:
             raw = self.video.render_raw(vram, xscroll, ys)
         x0 = 0 if panel_shown(vram) else 8                                  # (render.s view_check: centred then)
+        if pen_pab is not None:                                             # (the checker: render.s pen_pab)
+            pab = np.frombuffer(bytes(pen_pab), np.uint8)[raw]
+            ph = self.video.phase_map(vram, xscroll, ys)
+            return np.where(ph == 1, pab & 15, pab >> 4).astype(np.uint8)[:, x0:x0 + 320]
         return self.indices(raw, palette, pen_map)[:, x0:x0 + 320]
 
     def bar(self, vram, palette, pen_map=None, bar_map=None):

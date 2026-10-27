@@ -159,6 +159,13 @@ over the playfield and the bar is empty.
   recognisable.  `tools/assets.py` gives every scene this palette (the scene machinery stays, its choice no longer
   matters), mapped in Oklab with the lightness scaled by 0.5; the status bar keeps its own palette.
   `GAUNTLET_PALETTE=scenes python games/gauntlet/tools/build.py`: the fitted scene palettes again.
+* **Checker dither** (the maze and the objects, not the text): a pen may show as a checker of two palette colours
+  (`tools/assets.py` checker_pairs: the pair whose mix in linear light, as a CRT blends neighbouring pixels, matches
+  its colour best, the pair's own contrast x 0.25 added so that only close colours mix; `GAUNTLET_DITHER=0` turns it
+  off, a smaller weight mixes more).  render.s keeps each pen's pair (pen_pab: a << 4 | b; the text's a == b) and a
+  second set of colour tables (LUTB) for the odd rows: the maze's tiles take the checker from the maze's coordinates
+  (it scrolls with the maze), a baked object from its own top left corner (it moves with the object); no cost at
+  draw time.  The reference renderer's phase_map gives the same phase, so the tests stay exact.
 * **The title logo's colour band** (the arcade's raster effect: the logo has a pen a line, lines 162-218, and the
   game moves a gradient through those pens): on the STE the band pens are colour 15 while the title is up, and the
   Timer B rewrites colour 15 at every line end of the band (`engine/rt/borders.s` BD_BAND: an early, polled event

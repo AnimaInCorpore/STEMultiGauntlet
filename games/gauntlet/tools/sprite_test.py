@@ -77,7 +77,7 @@ def main():
         h.put_raw(v, pal, xs)
         h.draw()
         got = h.picture()
-        want = oracle.picture_raw(v, pal, xs, h.pen_map())
+        want = oracle.picture_raw(v, pal, xs, h.pen_map(), h.pen_pab())
         state["n"] += 1
         # the rows' 64 KB crossings: the ring's address of each object's lines
         mem, sym = h.sim.mem, h.sym

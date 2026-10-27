@@ -96,8 +96,9 @@ class Video:
         opaque = np.repeat(np.repeat((d & 0x8000) != 0, 8, 0), 8, 1)
         return pix.astype(np.int16), opaque | (raw != 0)
 
-    def motion_objects(self, vram, xscroll, yscroll, y0, y1):
-        """MAME's MO bitmap over lines y0..y1 ([y1 + 1, 336], NO_MO where nothing is drawn)."""
+    def motion_objects(self, vram, xscroll, yscroll, y0, y1, phase=None):
+        """MAME's MO bitmap over lines y0..y1 ([y1 + 1, 336], NO_MO where nothing is drawn); phase ([y1 + 1, 336]):
+        each drawn pixel's checker phase, (x + y) & 1 from its object's top left corner (the STE bakes it so)."""
         mo = np.full((y1 + 1, W), NO_MO, np.int16)
         ram = words(vram[0x2000:0x4000]).reshape(4, 1024)
         slip = words(vram[0x5F80:0x6000])
@@ -114,11 +115,11 @@ class Video:
             visited = set()
             while link not in visited:                                 # build_active_list
                 visited.add(link)
-                self._object(mo, clip, ram[:, link], xs, ys, height_bm)
+                self._object(mo, clip, ram[:, link], xs, ys, height_bm, phase)
                 link = ram[3, link] & 0x3FF
         return mo
 
-    def _object(self, bm, clip, e, xs, ys, height_bm):
+    def _object(self, bm, clip, e, xs, ys, height_bm, phase=None):
         """render_object (no neighbours, no vflip, no special value)."""
         code = (e[0] & 0x7FFF) ^ 0x800
         color = 0x100 + (e[1] & 0x0F) * 16
@@ -132,6 +133,7 @@ class Video:
         if ypos >= height_bm:
             ypos -= 0x200
         x0, x1, c0, c1 = clip
+        left = xpos
         if ypos > c1 or ypos + height * 8 <= c0:                       # (no row in the band)
             return
         xadv = 8
@@ -156,9 +158,24 @@ class Video:
                     d = bm[a0:a1 + 1, b0:b1 + 1]
                     keep = s != 0
                     d[keep] = color + s[keep]
+                    if phase is not None:
+                        yy, xx = np.mgrid[a0:a1 + 1, b0:b1 + 1]
+                        phase[a0:a1 + 1, b0:b1 + 1][keep] = ((xx - left + yy - ypos) & 1)[keep]
                 code += 1
 
     # ---- the picture -----------------------------------------------------------------------------------------
+    def phase_map(self, vram, xscroll, yscroll):
+        """[240, 336]: each pixel's checker phase: the playfield's and the shadows' (x + y) & 1 in the 512 x 512
+        playfield, an object pixel's from its object's top left corner (the alphanumerics' pens have one colour)."""
+        rows = (np.arange(H) + (yscroll >> 7)) & 0x1FF
+        cols = (np.arange(W) + xscroll) & 0x1FF
+        ph = ((rows[:, None] + cols[None, :]) & 1).astype(np.int8)
+        mph = np.zeros((H, W), np.int8)
+        mo = self.motion_objects(vram, xscroll, yscroll, 0, H - 1, mph)
+        put = (mo != NO_MO) & ((mo & 0x0F) != 1)
+        ph[put] = mph[put]
+        return ph
+
     def render_raw(self, vram, xscroll, yscroll, y0=0, y1=H - 1, out=None):
         """Lines y0..y1 of the picture (one screen_update with that cliprect) into out ([240, 336] int16, a new one
         if None); returns out."""

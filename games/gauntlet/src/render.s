@@ -150,6 +150,7 @@ init_video:
 	move.w	#-1,sc_cand
 	move.w	#SCENE_DUE,scene_due
 	move.l	#scene_idx,scene_idx_p
+	move.l	#scene_pab,scene_pab_p
 	move.w	#-1,pal_tick		; (the first picture compares every pen)
 	move.w	#MO_FADE_EVERY,mo_fade_ctr
 	lea	black_pal,a1
@@ -172,6 +173,10 @@ init_video:
 	move.w	#768/4-1,d0
 .pm:	move.l	#$ffffffff,(a0)+
 	dbf	d0,.pm
+	lea	pen_pab,a0
+	move.w	#768/4-1,d0
+.pp:	move.l	#$ffffffff,(a0)+
+	dbf	d0,.pp
 	lea	ARC_VRAM,a0
 	lea	pf_shadow,a1
 	move.w	#$2000/4-1,d0
@@ -951,23 +956,45 @@ pen_new:
 	lea	bar_col,a3
 	st	(a3,d5.w)
 	st	bar_dirty
-.nb:	move.l	scene_idx_p,a3
-	move.b	(a3,d3.w),d1
+.nb:	bra	pen_remap		; (its colours in the scene's palette)
+
+; pen_remap: pen d0.w's colours from its RGB (pen_rgb) in the current scene: pen_pab = a << 4 | b, its checker pair
+; (the maze's and the objects' pens: scene_pab; the text's: one colour, scene_idx; a band pen on the title: BAND_COL),
+; pen_map = a; a change goes into set_mask.  Keeps d0/d4/d6/a0-a2.
+pen_remap:
+	lea	pen_rgb,a3
+	move.w	d0,d3
+	add.w	d3,d3
+	move.w	(a3,d3.w),d3
+	cmp.w	#$100,d0
+	blo.s	.txt
+	move.l	scene_pab_p,a3
+	move.b	(a3,d3.w),d5
 	tst.b	band_mode		; (a band pen on the title: the band's colour)
-	beq.s	.nbd
-	move.w	d0,d5
-	sub.w	#$100,d5
-	cmp.w	#$90,d5
-	bhs.s	.nbd
-	and.w	#15,d5
-	subq.w	#2,d5
-	cmp.w	#7,d5
-	bhi.s	.nbd
-	moveq	#BAND_COL,d1
-.nbd:	lea	pen_map,a3
-	cmp.b	(a3,d0.w),d1
-	beq	.same
-	move.b	d1,(a3,d0.w)
+	beq.s	.set
+	move.w	d0,d7
+	sub.w	#$100,d7
+	cmp.w	#$90,d7
+	bhs.s	.set
+	and.w	#15,d7
+	subq.w	#2,d7
+	cmp.w	#7,d7
+	bhi.s	.set
+	move.b	#BAND_COL*$11,d5
+	bra.s	.set
+.txt:	move.l	scene_idx_p,a3
+	move.b	(a3,d3.w),d5
+	move.b	d5,d7
+	lsl.b	#4,d5
+	or.b	d7,d5
+.set:	lea	pen_pab,a3
+	cmp.b	(a3,d0.w),d5
+	beq.s	.same
+	move.b	d5,(a3,d0.w)
+	move.b	d5,d7
+	lsr.b	#4,d7
+	lea	pen_map,a3
+	move.b	d7,(a3,d0.w)
 	move.w	d0,d1
 	lsr.w	#4,d1
 	add.w	d1,d1
@@ -1186,38 +1213,14 @@ scene_switch:
 	move.w	d0,d1
 	moveq	#12,d2
 	lsl.l	d2,d1
+	move.l	d1,d2
 	add.l	#scene_idx,d1
 	move.l	d1,scene_idx_p
-	move.l	d1,a3
-	lea	pen_rgb,a0
-	lea	pen_map,a1
-	lea	set_mask,a2
-	moveq	#0,d0			; the pen
-.p:	move.w	(a0)+,d1
-	move.b	(a3,d1.w),d1
-	tst.b	band_mode		; (a band pen on the title: the band's colour)
-	beq.s	.pb
-	move.w	d0,d2
-	sub.w	#$100,d2
-	cmp.w	#$90,d2
-	bhs.s	.pb
-	and.w	#15,d2
-	subq.w	#2,d2
-	cmp.w	#7,d2
-	bhi.s	.pb
-	moveq	#BAND_COL,d1
-.pb:	cmp.b	(a1,d0.w),d1
-	beq.s	.n
-	move.b	d1,(a1,d0.w)
-	move.w	d0,d1
-	lsr.w	#4,d1
-	add.w	d1,d1
-	moveq	#15,d2
-	and.w	d0,d2
-	move.w	(a2,d1.w),d3
-	bset	d2,d3
-	move.w	d3,(a2,d1.w)
-.n:	addq.w	#1,d0
+	add.l	#scene_pab,d2
+	move.l	d2,scene_pab_p
+	moveq	#0,d0			; every pen
+.p:	bsr	pen_remap
+	addq.w	#1,d0
 	cmp.w	#768,d0
 	blo.s	.p
 	addq.w	#1,scene_switches
@@ -1254,39 +1257,13 @@ pal_black:
 
 ; band_remap: the band pens' colours mapped again (band_mode changed)
 band_remap:
-	movem.l	d0-d3/a0-a3,-(sp)
-	move.l	scene_idx_p,a3
-	lea	pen_rgb,a0
-	lea	pen_map,a1
-	lea	set_mask,a2
-	move.w	#$100,d0
-.p:	moveq	#15,d2
-	and.w	d0,d2
-	subq.w	#2,d2
-	cmp.w	#7,d2
-	bhi.s	.n
-	move.w	d0,d1
-	add.w	d1,d1
-	move.w	(a0,d1.w),d1
-	move.b	(a3,d1.w),d1
-	tst.b	band_mode
-	beq.s	.m
-	moveq	#BAND_COL,d1
-.m:	cmp.b	(a1,d0.w),d1
-	beq.s	.n
-	move.b	d1,(a1,d0.w)
-	move.w	d0,d2
-	lsr.w	#4,d2
-	add.w	d2,d2
-	moveq	#15,d3
-	and.w	d0,d3
-	move.w	(a2,d2.w),d1
-	bset	d3,d1
-	move.w	d1,(a2,d2.w)
-.n:	addq.w	#1,d0
+	movem.l	d0-d7/a0-a3,-(sp)
+	move.w	#$100,d0		; (pen_remap: the band pens by band_mode, the others as they are)
+.p:	bsr	pen_remap
+	addq.w	#1,d0
 	cmp.w	#$190,d0
 	blo.s	.p
-	movem.l	(sp)+,d0-d3/a0-a3
+	movem.l	(sp)+,d0-d7/a0-a3
 	rts
 
 ; band_build (the VBL, the shown picture has the band): the band's line colours (bd_band_cols) from the arcade's
@@ -1363,10 +1340,10 @@ set_changed:
 	st	(a0,d1.w)
 	rts
 
-; map_id: motion object palette d0.w's 16 STE colours (pen_map) -> d0 = their number (1-255) in map_tab; a new one
+; map_id: motion object palette d0.w's 16 STE colour pairs (pen_pab) -> d0 = their number (1-255) in map_tab; a new one
 ; is added; a full table starts again (and the baked images, keyed by the numbers, are forgotten).  Keeps d6/d7/a4.
 map_id:
-	lea	pen_map+$100,a0
+	lea	pen_pab+$100,a0		; (the pairs: the checker's colours too)
 	lsl.w	#4,d0
 	add.w	d0,a0
 	movem.l	(a0),d0-d3		; (the 16 bytes)
@@ -1423,46 +1400,63 @@ lut_need:
 
 ; lut_build: table d0.w (2 KB at LUTS) from the 16 pens from d1.w: [b] = the plane bits of the pixels b >> 4 and
 ; b & 15 (two bits a byte, plane 0 in the high byte, the first pixel the higher bit); at +1024 the pixels swapped.
-lut_build:
-	lea	LUTS,a1
+lut_build:				; (the checker: pen_pab's pairs; even rows LUTS, odd rows LUTB)
 	and.l	#$ffff,d0
 	moveq	#11,d2
 	lsl.l	d2,d0
-	add.l	d0,a1
-	lea	pen_map,a3
+	move.l	d0,-(sp)
+	lea	pen_pab,a3
 	add.w	d1,a3
 	lea	spread4,a0
-	lea	lut_tmp,a2		; s[16], then s << 1
+	lea	lut_tmp,a2		; sa[16] +0, s2a +64, sb +128, s2b +192 (s2: << 1, the pair's left pixel)
 	moveq	#16-1,d3
 .s:	moveq	#0,d0
 	move.b	(a3)+,d0
+	move.w	d0,d1
+	lsr.w	#4,d0			; a
+	and.w	#15,d1			; b
 	add.w	d0,d0
 	add.w	d0,d0
 	move.l	(a0,d0.w),d0
-	move.l	d0,(a2)+
+	move.l	d0,(a2)
 	add.l	d0,d0
-	move.l	d0,64-4(a2)
+	move.l	d0,64(a2)
+	add.w	d1,d1
+	add.w	d1,d1
+	move.l	(a0,d1.w),d1
+	move.l	d1,128(a2)
+	add.l	d1,d1
+	move.l	d1,192(a2)
+	addq.l	#4,a2
 	dbf	d3,.s
-	lea	lut_tmp+64,a3		; [hi << 4 | lo] = s2[hi] | s[lo]
+	move.l	(sp),d0
+	lea	LUTS,a1
+	add.l	d0,a1
+	lea	lut_tmp+64,a3		; even rows: [hi << 4 | lo] = s2a[hi] | sb[lo]; the left pixel a
+	lea	lut_tmp+128,a4
+	bsr.s	lut_fill
+	lea	lut_tmp+128,a3		; mirrored (the left pixel lo): s2a[lo] | sb[hi]
+	lea	lut_tmp+64,a4
+	bsr.s	lut_fill
+	move.l	(sp)+,d0
+	lea	LUTB,a1
+	add.l	d0,a1
+	lea	lut_tmp+192,a3		; odd rows: s2b[hi] | sa[lo]; the left pixel b
+	lea	lut_tmp,a4
+	bsr.s	lut_fill
+	lea	lut_tmp,a3		; mirrored: s2b[lo] | sa[hi]
+	lea	lut_tmp+192,a4
+; lut_fill: 256 longs at a1: [hi << 4 | lo] = (a3)[hi] | (a4)[lo]
+lut_fill:
 	moveq	#16-1,d3
 .h:	move.l	(a3)+,d2
-	lea	lut_tmp,a2
+	move.l	a4,a2
 	rept	16
 	move.l	(a2)+,d0
 	or.l	d2,d0
 	move.l	d0,(a1)+
 	endr
 	dbf	d3,.h
-	lea	lut_tmp,a3		; mirrored: s2[lo] | s[hi]
-	moveq	#16-1,d3
-.m:	move.l	(a3)+,d2
-	lea	lut_tmp+64,a2
-	rept	16
-	move.l	(a2)+,d0
-	or.l	d2,d0
-	move.l	d0,(a1)+
-	endr
-	dbf	d3,.m
 	rts
 
 spread4:				; a colour's plane bits, one a byte (plane 0 in the high byte)
@@ -1720,7 +1714,11 @@ pf_tile_draw:
 .nos:	rts
 
 ; tile_rows: 8 rows of pixels at a0 (4 bytes a row) through the table a2 (d7.b set: mirrored) to a1 (256 bytes a line)
-tile_rows:
+tile_rows:				; (even rows through a2 (LUTS), odd rows through its LUTB twin: the checker)
+	move.l	a3,-(sp)
+	move.l	a2,a3
+	sub.l	#LUTS,a3
+	add.l	#LUTB,a3
 	moveq	#8-1,d6
 	tst.b	d7
 	bne	.mir
@@ -1749,9 +1747,12 @@ tile_rows:
 	or.l	(a2,d1.w),d0
 	movep.l	d0,0(a1)
 	lea	256(a1),a1
+	exg	a2,a3
 	dbf	d6,.row
+	move.l	(sp)+,a3
 	rts
 .mir:	lea	1024(a2),a2
+	lea	1024(a3),a3
 .mrow:	addq.l	#4,a0
 	moveq	#0,d1
 	move.b	-(a0),d1
@@ -1779,7 +1780,9 @@ tile_rows:
 	movep.l	d0,0(a1)
 	lea	256(a1),a1
 	addq.l	#4,a0
+	exg	a2,a3
 	dbf	d6,.mrow
+	move.l	(sp)+,a3
 	rts
 
 ; pf_recolour: playfield palette d0.w's pens d1.w map to other colours (in P: d2 = 1, P': d2 = 0): the copies of its
@@ -3919,7 +3922,12 @@ mo_bake:
 	sne	ob_flip
 	beq	.nf
 	lea	1024(a2),a2		; (mirrored)
-.nf:	move.w	ob_h,d0
+.nf:	move.l	a2,ob_luta		; (the checker: odd rows through the LUTB twin)
+	move.l	a2,a1
+	sub.l	#LUTS,a1
+	add.l	#LUTB,a1
+	move.l	a1,ob_lutb
+	move.w	ob_h,d0
 	lsl.w	#3,d0
 	move.w	d0,(a0)			; rows
 	clr.w	6(a0)			; (MO_ORDER: the sorted rows' offset)
@@ -3950,7 +3958,11 @@ mo_bake:
 	clr.w	ob_ty
 .ty:	; the tiles of this tile row: t(j) = code + ty * w + (flip ? w - 1 - tx : tx), tx = 4 strip + j
 	moveq	#0,d7			; r
-.r:	moveq	#0,d5			; the opaque mask
+.r:	move.l	ob_luta,a2		; (the row's phase: rows from the object's top)
+	btst	#0,d7
+	beq.s	.re
+	move.l	ob_lutb,a2
+.re:	moveq	#0,d5			; the opaque mask
 	moveq	#0,d6			; the shadow mask
 	lea	ob_row,a1
 	clr.l	(a1)
@@ -5200,6 +5212,7 @@ ir4:		incbin	"ir4.bin"	; [I << 4 | C]: a pen's 4-bit channel
 ir4s:		incbin	"ir4s.bin"	; (the same as an STE nibble)
 scene_cols:	incbin	"scene_cols.bin"	; SCENE_N x 16 STE colours
 scene_idx:	incbin	"scene_idx.bin"	; SCENE_N x 4096: 4-bit RGB -> the palette's colour
+scene_pab:	incbin	"scene_pab.bin"	; SCENE_N x 4096: 4-bit RGB -> the checker pair a << 4 | b
 scene_err:	incbin	"scene_err.bin"	; SCENE_N x 4096: its error (scene_check)
 scene_panel:	incbin	"scene_panel.bin"	; per scene: 1 fitted to scenes with the panel up
 	even
@@ -5326,7 +5339,10 @@ set_mask:	ds.w	48
 mo_epoch:	ds.b	16
 lut_stale:	ds.b	32
 	even
-lut_tmp:	ds.l	40
+lut_tmp:	ds.l	64
+ob_luta:	ds.l	1
+ob_lutb:	ds.l	1
+LUTB:		ds.b	32*2048	; (as LUTS: the odd rows' tables, the checker's other phase)
 pf_list_n:	ds.w	8
 al_list_n:	ds.w	64
 row_ver:	ds.l	30
@@ -5341,6 +5357,7 @@ runs_dirty:	ds.b	30
 row_t2:		ds.b	30
 	even
 pen_map:	ds.b	768
+pen_pab:	ds.b	768		; (each pen's checker pair: a << 4 | b; the text's a == b)
 	even
 pen_rgb:	ds.w	768		; (each pen's 4-bit RGB, as pen_new saw it)
 bar_pmap:	ds.b	256		; (each text pen's colour in the bar's palette)
@@ -5367,6 +5384,7 @@ shown_band:	ds.b	1		; (the shown picture's)
 mo_down:	ds.b	1		; (the panel was down: the objects' colours all taken when it comes up)
 	even
 scene_idx_p:	ds.l	1
+scene_pab_p:	ds.l	1
 scene_cur:	ds.w	1
 scene_switches:	ds.w	1
 pal_tick:	ds.w	1

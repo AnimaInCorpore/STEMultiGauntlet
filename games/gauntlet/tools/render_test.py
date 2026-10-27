@@ -179,6 +179,10 @@ class Harness:
         """the STE's pen -> colour map (768 bytes: the scene it chose, the colour changes it applied)"""
         return bytes(self.sim.mem.r_block(self.sym["pen_map"], 768))
 
+    def pen_pab(self):
+        """the STE's pen -> checker pair (768 bytes: a << 4 | b, render.s pen_pab)"""
+        return bytes(self.sim.mem.r_block(self.sym["pen_pab"], 768))
+
     def bar_pmap(self):
         """the STE's text pens' colours in the status bar's palette (256 bytes)"""
         return bytes(self.sim.mem.r_block(self.sym["bar_pmap"], 256))
@@ -231,7 +235,7 @@ def main():
             cyc.append(used)                                # (not the first: init_video, every tile and character)
         got = np.vstack((h.picture(), h.bar()))
         pm = h.pen_map()
-        want = np.vstack((oracle.picture_raw(vram, m.palette(), m.xscroll, pm), oracle.bar(vram, m.palette(), pm, h.bar_pmap())))
+        want = np.vstack((oracle.picture_raw(vram, m.palette(), m.xscroll, pm, h.pen_pab()), oracle.bar(vram, m.palette(), pm, h.bar_pmap())))
         checked += 1
         n = int((got != want).sum())
         if n:
