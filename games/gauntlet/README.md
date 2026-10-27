@@ -153,6 +153,12 @@ over the playfield and the bar is empty.
   two pictures, so with the panel down any large change is taken the same way (a new page); in play a large change
   freezes the colours until it has stayed 2 pictures, then is taken whole (no staged fade-in, a short flash left
   out).  When the panel goes up or down the palette of the other kind is chosen in that picture (`view_check`).
+* **Palette (the default since 2026-10-26)**: `docs/palette_db15.json`, DawnBringer 16 on the STE grid without its
+  brown (15 colours, colour 0 the near-black $112) plus colour 15 kept free (the title logo's band; a colour-cycled
+  glow later).  Chosen by eye over the fitted palettes above: more shades in the sprites, every player and monster
+  recognisable.  `tools/assets.py` gives every scene this palette (the scene machinery stays, its choice no longer
+  matters), mapped in Oklab with the lightness scaled by 0.5; the status bar keeps its own palette.
+  `GAUNTLET_PALETTE=scenes python games/gauntlet/tools/build.py`: the fitted scene palettes again.
 * **The title logo's colour band** (the arcade's raster effect: the logo has a pen a line, lines 162-218, and the
   game moves a gradient through those pens): on the STE the band pens are colour 15 while the title is up, and the
   Timer B rewrites colour 15 at every line end of the band (`engine/rt/borders.s` BD_BAND: an early, polled event

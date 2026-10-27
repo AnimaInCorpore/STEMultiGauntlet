@@ -17,8 +17,10 @@
     bar_map.bin      the status bar's cells (tools/bar.py): their word in the alphanumerics, their byte in the bar
     bar.i            BAR_N (the cells), BAR_LINES
     ir4.bin          256 bytes: [I << 4 | C] = the 4-bit channel of an IRGB pen's intensity I and channel C
-    scene_cols.bin   SCENE_N x 16 STE words: the scene palettes (docs/scenes.json, ref/scene_palettes.py; 0: the
-                     general one, docs/palette.json)
+    scene_cols.bin   SCENE_N x 16 STE words: every scene the port's palette (docs/palette_db15.json: DawnBringer 16
+                     without its brown, colour 15 kept free: the title band, a glow), mapped in Oklab with the
+                     lightness x 0.5.  GAUNTLET_PALETTE=scenes: the fitted scene palettes instead (docs/scenes.json,
+                     ref/scene_palettes.py)
     scene_idx.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> the nearest of the palette's 16 in Oklab
     scene_err.bin    SCENE_N x 4096 bytes: that distance (Oklab x 400, at most 255): render.s scene_pick's score
     scenes.i         SCENE_N
@@ -30,6 +32,7 @@
 """
 from pathlib import Path
 import json
+import os
 import sys
 
 import numpy as np
@@ -100,10 +103,17 @@ def scene_tables(dest):
     panel = [bool(p.get("panel")) for p in doc["palettes"] if p["samples"]]
     grid = np.array([[r, g, b] for r in range(16) for g in range(16) for b in range(16)]) * 17
     lab = oklab(grid)
+    target = os.environ.get("GAUNTLET_PALETTE", "db15") == "db15"
+    weight = np.ones(3)
+    if target:                                  # the port's palette in every scene (colour 15 free: band / glow)
+        db = json.loads((DOCS / "palette_db15.json").read_text())["colours"]
+        pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in db] + [[0, 0, 0]])
+        pals = [pal] * len(pals)
+        weight = np.array([0.5, 1, 1])          # (hue shifts cost more than shading shifts)
     cols, idx, err = bytearray(), bytearray(), bytearray()
     for pal, up in zip(pals, panel):
-        d = np.sqrt(((lab[:, None] - oklab(pal)[None]) ** 2).sum(2))
-        if not up:
+        d = np.sqrt((((lab[:, None] - oklab(pal)[None]) * weight) ** 2).sum(2))
+        if not up or target:
             d[:, 15] = np.inf                                               # (the title logo's band: render.s BAND_COL)
         idx += d.argmin(1).astype(np.uint8).tobytes()
         err += np.minimum(255, np.round(d.min(1) * 400)).astype(np.uint8).tobytes()
