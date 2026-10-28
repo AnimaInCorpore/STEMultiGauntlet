@@ -52,7 +52,12 @@ mask to the opaque one, and no shadow rows are prepared or drawn.  The reference
 `Video.black_shadow`, set by `render_test.py` / `sprite_test.py` from the build's defines) draws pen 1 the same way;
 both tests exact in both modes.  Hatari over the same game ticks: as fast as no shadows, the horde 9.5 -> 12.4
 pictures/s (ticks 30.8 -> 34.4), light play 32.3 -> 32.7, demo play 25.8 -> 26.8 (`docs/black_shadow_horde.png`:
-left the shadows, right black).  P' is still kept up to date though no object reads it any more.
+left the shadows, right black).  With it P' is no longer kept: a new tile goes into P only (`pf_tile_new`), and a
+colour change of a shadow set (pens $200-$27F) neither redraws listed tiles nor counts as a colour change
+(`set_changed`).  `render_test.py`, Musashi CPU + Blitter a picture (mean): attract mode 398.6k -> 374.2k (-6%),
+seed 1 level 2 302.3k -> 299.1k, seed 12 level 5 265.1k -> 264.4k, seed 14 level 9 over 900 pictures 296.1k ->
+291.7k with its maximum (a level start: the whole window's tiles) 4.22M -> 2.76M.  In Hatari the demo starts sooner
+(115 ticks by VBL 750 against 61) and the rates per window stay within the runs' scatter (demo play 26.8 / 26.5).
 
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 
@@ -150,8 +155,8 @@ arcade's x 0-319 at the STE's 0-319 in lines 0-239; the status bar (the side pan
 maze (columns 29-39) go to the bar only; else (the title, the high scores, the monster pages' text) they are drawn
 over the playfield and the bar is empty.
 
-* **Playfield**: the 512 x 512 torus kept as a bitmap in STE planes, P, and P' in the shadow colours (pens $200-$27F);
-  a tile is drawn into both when the game changes it in the visible window (compared with a copy where the game's
+* **Playfield**: the 512 x 512 torus kept as a bitmap in STE planes, P, and P' in the shadow colours (pens $200-$27F;
+  only with `-D MO_BLACKSH=0`); a tile is drawn into both when the game changes it in the visible window (compared with a copy where the game's
   writers marked it) or when its colours map to other STE colours.  Two display rings of 56 words x 880 lines, drawn in turn, shown with
   the hardware scroll (base address, $ffff8265, $ffff820f); every ring position shows a fixed place of the torus, so
   moving the window copies only the strip a ring has never held, and a ring copies from P only the damage (objects,

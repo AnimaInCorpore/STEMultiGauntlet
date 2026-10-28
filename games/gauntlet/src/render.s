@@ -1328,6 +1328,13 @@ BAND_I	set	BAND_I+1
 set_changed:
 	cmp.w	#16,d7
 	blo	al_set_changed		; (the text's: drawn again as characters, al_counter)
+	if MO_BLACKSH			; (no P': the shadow sets' colours are not shown)
+	cmp.w	#32,d7
+	blo.s	.use
+	cmp.w	#40,d7
+	blo	.nop
+.use:
+	endc
 	addq.w	#1,col_epoch		; (the objects' or the playfield's colours changed: pic_same, text_only)
 	cmp.w	#32,d7
 	blo	.mo
@@ -1344,6 +1351,9 @@ set_changed:
 	blo	.sh
 	moveq	#1,d2			; (P)
 .sh:	bra	pf_recolour
+	if MO_BLACKSH
+.nop:	rts
+	endc
 .mo:	move.w	d7,d0
 	sub.w	#16,d0
 	move.w	d0,-(sp)
@@ -1617,7 +1627,11 @@ cmp_run:
 ; pf_tile_new: the tile at index d3.w changed: into P and P', queued for both rings, listed under its palette
 pf_tile_new:
 	move.w	d3,-(sp)
+	if MO_BLACKSH
+	moveq	#1,d2			; (P only: no object reads P')
+	else
 	moveq	#3,d2			; (P and P')
+	endc
 	bsr	pf_tile_draw
 	move.w	(sp),d3
 	bsr	pend_push
