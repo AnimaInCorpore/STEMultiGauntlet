@@ -4468,6 +4468,9 @@ mo_prep_draw:
 	dbf	d5,.l3
 	bra	.g
 .od:	; the shadow rows: P' at row 0's column, when neither its columns nor its lines wrap inside the image
+	ifd NOSHADOW				; (measurement only: the objects' shadows left out)
+	bra	.done
+	endc
 	cmp.w	#-1,(a1)
 	beq	.done			; (none)
 	move.w	ob_col,d0
@@ -4748,6 +4751,9 @@ mo_strip_draw:
 	move.l	(sp)+,a0
 mo_strip_shadow:
 	; the shadow rows: source P' (its line (line - tg_pline) & 511, column (col - tg_pcol) & 31), no skew
+	ifd NOSHADOW
+	rts
+	endc
 	move.w	(a0),d0
 	lsl.w	#2,d0
 	lea	IMG_HDR(a0,d0.w),a1	; the shadow masks

@@ -37,6 +37,13 @@ breakpoints, 8,500 VBLs, two runs equal), pictures / logic ticks a second (the a
 | legend / monster pages (4,500 VBLs) | 34.1 | 51.5 |
 
 In the horde the renderer starves the logic (STARVE): the game itself runs at a third of the arcade's speed there.
+Hatari's profiler over the horde (VBLs 2000-2750, CPU cycles with the Blitter's stalls, the runtime's symbols from
+the link map), a picture: 939k (light play 219k): objects and shadows 343k (`mo_prep_draw` 155k, `mo_snapshot` 64k,
+`mo_place` 34k), the game's program 206k (71k a tick, light play 14k), playfield / text / palette / bar 128k, pass
+dispatch (`blit_go_split` ...) 87k, interrupts 78k, `render_frame` 63k.  `-D NOSHADOW=1` (measurement only: the
+objects' shadow rows not drawn, pen 1 transparent) over the same game ticks: the horde 9.5 -> 12.3 pictures/s
+(ticks 30.8 -> 34.5), 939k -> 779k a picture (`mo_prep_draw` 155k -> 76k), light play unchanged (32.3 -> 32.7);
+the logic and the per-object work stay.
 
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 
