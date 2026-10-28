@@ -69,6 +69,16 @@ plane bytes, `movep`), in 2,048 direct-mapped slots (key: code, palette, flip x;
 longest pictures: the camera cuts 20 -> 13 and 25 -> 18 VBLs; the dense horde's 12-20 VBL pictures stay (the game's
 logic, ~129k cycles a tick there, and the objects).
 
+2026-10-28: **a hit's flash no longer sticks.**  A player who is hit flashes: the game turns two pens of the
+player's palette white for 2 frames (the elf: pens 11 and 12, its coat).  The objects' colours are checked every 4th
+picture, and between large changes only pens not yet shown are taken (colour cycling left out); a large change that
+came during the flash took the white, and the way back, a small change, was left out until the next large change:
+the elf's coat stayed white for seconds (the attract mode, `render_test.py --seed 0`: 199 of the pictures sampled
+every other frame from 2614 on).  Now, for `FRZ_SETTLE` (4) VBLs after a large change, every pen is taken again, and
+a picture that took a light change checks again at the next picture (`mo_recheck`): the white goes at once (0
+pictures).  The render harness counts a VBL a picture (`render_test.s`), as nothing calls `vbl_video` there.
+Exact (`sprite_test.py`, `render_test.py` four scenes); the horde scene's cost unchanged (296.9k a picture).
+
 ### The ghost horde
 
 2026-10-28, Hatari (the attract demo's densest horde, VBLs 2250-2750, the build with black shadows and the tile

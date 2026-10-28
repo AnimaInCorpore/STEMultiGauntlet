@@ -782,9 +782,12 @@ pal_update:
 	move.w	#256/2,d4
 	bsr	pal_range
 	bra	.nomo
-.mu1:	moveq	#3,d0
+.mu1:	tst.b	mo_recheck		; (a light change applied last picture: checked again at once, so a flash
+	bne.s	.mu2			;  that the game undoes after 2 frames does not stay for 4 pictures)
+	moveq	#3,d0
 	and.w	pal_tick,d0
 	bne	.nomo
+.mu2:	sf	mo_recheck
 	lea	ARC_PALETTE+$200,a0
 	lea	pal_shadow+$200,a1
 	moveq	#0,d0			; the changed longs
@@ -820,6 +823,7 @@ pal_update:
 	cmp.w	#MO_FADE_EVERY,mo_fade_ctr
 	blo	.nomo
 .mo:	clr.w	mo_fade_ctr
+	st	mo_recheck		; (the next picture checks again: a change undone at once is followed)
 	lea	ARC_PALETTE+$200,a0
 	lea	pal_shadow+$200,a1
 	move.w	#256/2,d4
@@ -855,6 +859,11 @@ pal_sets:				; (the sets whose pens changed: dealt with)
 ; pal_range_frz: as pal_range, but colour cycling left out: unless a large change came since its last call (the byte at
 ; a2: pal_look notes it), only the pens that were dark (no brightness or no colour: not yet shown) are taken; the others
 ; keep their colours (their copies stay different: a large change later takes them too).  The first picture takes all.
+; For FRZ_SETTLE VBLs after a large change every pen is taken too (the VBL count's low word at a2 + 2): a short change
+; the large one caught (a hit's white flash, 2 frames) is undone at once instead of staying until the next large one.
+	ifnd FRZ_SETTLE
+FRZ_SETTLE = 4
+	endc
 MO_ARM = 48				; (longs changed in one picture that make the scene check look: another scene, maybe)
 MO_STILL = 16				; (the panel down: pictures without a large change of the objects' colours before
 					;  they are taken, once)
@@ -867,9 +876,14 @@ pal_range_frz:
 	tst.b	(a2)
 	beq.s	.small
 	sf	(a2)
+	move.w	rf_vbls+2,2(a2)
 	move.w	#SCENE_DUE,scene_due	; (a new scene, maybe: its palette chosen in the next checks)
 	bra	pal_range		; (a large change: every pen)
-.small:	move.w	d4,d6
+.small:	move.w	rf_vbls+2,d0
+	sub.w	2(a2),d0
+	cmp.w	#FRZ_SETTLE,d0
+	blo	pal_range		; (just after a large change: every pen)
+	move.w	d4,d6
 	add.w	d6,d6
 	subq.w	#1,d6
 .p:	move.w	(a0),d1
@@ -5513,6 +5527,8 @@ scene_cur:	ds.w	1
 scene_switches:	ds.w	1
 pal_tick:	ds.w	1
 mo_fade_ctr:	ds.w	1
+mo_recheck:	ds.b	1
+	even
 col_epoch:	ds.w	1
 mo_hash:	ds.l	1
 mo_was_general:	ds.b	1
@@ -5520,8 +5536,13 @@ mo_was_general:	ds.b	1
 mo_copy:	ds.l	MO_COPY_LONGS	; (mo_ram_same: the general walk's input)
 pal_shadow:	ds.w	768
 pal_seen:	ds.w	768		; (pal_look: the pens as the last picture saw them)
+	even
 mo_large:	ds.b	1		; (pal_look: a large change of the objects' pens since they were taken)
+		ds.b	1
+		ds.w	1		; (pal_range_frz: the VBL of the last large change)
 pf_large:	ds.b	1		; (and of the playfield's)
+		ds.b	1
+		ds.w	1
 pf_shadow:	ds.w	4096
 al_dirty:	ds.b	1		; the alphanumerics written since they were compared (gauntlet.s's hooks)
 	even

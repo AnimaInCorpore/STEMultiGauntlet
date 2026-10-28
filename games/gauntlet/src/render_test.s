@@ -22,7 +22,8 @@ start:
 	lea	stack_top,sp
 	jsr	sim_wait
 	bsr	init_video
-.loop:	bsr	render_frame
+.loop:	addq.l	#1,rf_vbls		; (a VBL a picture: render.s counts them in vbl_video, which nothing calls here)
+	bsr	render_frame
 	jsr	sim_render_ret
 	jsr	sim_wait
 	bra.s	.loop
