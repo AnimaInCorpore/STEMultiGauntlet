@@ -75,6 +75,11 @@ MO_BLACKSH = 1				; shadow passes (-D MO_BLACKSH=0: the arcade's shadows, P' thr
 	if MO_BLACKSH
 NOSHADOW = 1
 	endc
+TCACHE = MO_BLACKSH			; the playfield's tiles kept drawn (P' unused: its memory), pf_tile_draw
+TC_N = 2048				; slots, direct-mapped: (code + palette * 8, flip x: ^ $400) & (TC_N - 1)
+TC_DATA = PFS				; a slot: 8 rows x 4 plane bytes as P holds them (movep)
+TC_KEYS = PFS+TC_N*32			; a slot's key.l (code | palette << 13 | flip x << 16, -1: empty) and its
+					; palette's table epoch.l (tc_epoch: lut_build counts every rebuild)
 AIMG = $300800				; the alphanumerics: 240 lines x 160 bytes
 PF_LISTS = $30A000			; 8 x 4096 words: the positions of the tiles of each playfield palette
 LUTS = $31A000				; 32 x 2 KB: per colour set, a byte of two pixels -> their plane bits (and mirrored)
@@ -198,6 +203,13 @@ init_video:
 	move.w	#4096/4-1,d0
 .pl:	clr.l	(a0)+
 	dbf	d0,.pl
+	if TCACHE
+	lea	TC_KEYS,a0		; (no tile kept)
+	move.w	#TC_N*2-1,d0
+	moveq	#-1,d1
+.tc:	move.l	d1,(a0)+
+	dbf	d0,.tc
+	endc
 	lea	pf_list_n,a0
 	moveq	#8-1,d0
 .pn:	clr.w	(a0)+
@@ -1428,6 +1440,17 @@ lut_need:
 ; b & 15 (two bits a byte, plane 0 in the high byte, the first pixel the higher bit); at +1024 the pixels swapped.
 lut_build:				; (the checker: pen_pab's pairs; even rows LUTS, odd rows LUTB)
 	and.l	#$ffff,d0
+	if TCACHE
+	move.w	d0,d2			; (the playfield's tables 8-15: the tiles kept with them out of date)
+	subq.w	#8,d2
+	cmp.w	#8,d2
+	bhs.s	.ne
+	add.w	d2,d2
+	add.w	d2,d2
+	lea	tc_epoch,a3
+	addq.l	#1,(a3,d2.w)
+.ne:
+	endc
 	moveq	#11,d2
 	lsl.l	d2,d0
 	move.l	d0,-(sp)
@@ -1726,9 +1749,66 @@ pf_tile_draw:
 	bsr	lut_need
 	lea	PFB,a1
 	add.l	d1,a1
+	if TCACHE
+	move.l	a3,-(sp)
+	move.l	a0,d3
+	sub.l	#tile_px,d3
+	lsr.l	#5,d3			; the code
+	moveq	#0,d4
+	move.w	d5,d4
+	lsl.w	#2,d4
+	or.w	d3,d4			; the key: code | palette << 13 (| flip x << 16)
+	move.w	d5,d6
+	lsr.w	#8,d6
+	add.w	d3,d6			; the slot: code + palette * 8
+	tst.b	d7
+	beq.s	.tkf
+	bset	#16,d4
+	eor.w	#$400,d6
+.tkf:	and.w	#TC_N-1,d6
+	move.w	d5,d0
+	moveq	#9,d3
+	lsr.w	d3,d0			; (the palette * 4)
+	lea	tc_epoch,a2
+	move.l	(a2,d0.w),d0		; its tables' epoch (lut_need above: rebuilt already)
+	moveq	#0,d3
+	move.w	d6,d3
+	lsl.l	#3,d3
+	lea	TC_KEYS,a2
+	add.l	d3,a2
+	lea	TC_DATA,a3
+	lsl.l	#2,d3
+	add.l	d3,a3			; the slot's rows
+	cmp.l	(a2),d4
+	bne.s	.tcm
+	cmp.l	4(a2),d0
+	bne.s	.tcm
+N	set	0			; a hit: the rows as they were drawn
+	rept	8
+	move.l	(a3)+,d0
+	movep.l	d0,N(a1)
+N	set	N+256
+	endr
+	bra.s	.tcd
+.tcm:	move.l	d4,(a2)			; a miss: drawn, then kept
+	move.l	d0,4(a2)
+	lea	LUTS+8*2048,a2
+	add.w	d5,a2
+	move.l	a1,-(sp)
+	bsr	tile_rows
+	move.l	(sp)+,a1
+N	set	0
+	rept	8
+	movep.l	N(a1),d0
+	move.l	d0,(a3)+
+N	set	N+256
+	endr
+.tcd:	move.l	(sp)+,a3
+	else
 	lea	LUTS+8*2048,a2
 	add.w	d5,a2
 	bsr	tile_rows
+	endc
 	movem.l	(sp)+,d1-d2/a0
 .nop:	btst	#1,d2
 	beq	.nos
@@ -5379,6 +5459,9 @@ crect:		ds.w	4
 set_mask:	ds.w	48
 mo_epoch:	ds.b	16
 lut_stale:	ds.b	32
+	if TCACHE
+tc_epoch:	ds.l	8		; (the playfield's tables 8-15: their rebuilds)
+	endc
 	even
 lut_tmp:	ds.l	64
 ob_luta:	ds.l	1

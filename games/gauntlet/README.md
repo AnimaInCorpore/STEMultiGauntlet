@@ -59,6 +59,16 @@ seed 1 level 2 302.3k -> 299.1k, seed 12 level 5 265.1k -> 264.4k, seed 14 level
 291.7k with its maximum (a level start: the whole window's tiles) 4.22M -> 2.76M.  In Hatari the demo starts sooner
 (115 ticks by VBL 750 against 61) and the rates per window stay within the runs' scatter (demo play 26.8 / 26.5).
 
+2026-10-28: **the playfield tile cache** (`TCACHE`, with `MO_BLACKSH`: in P''s memory).  A camera cut (the demo's
+jumps, a level start) draws ~650 new tiles in one picture, each ~3.5k cycles, most of it `tile_rows` (a byte of two
+pixels at a time through the colour table).  `pf_tile_draw` now keeps every tile it draws, as P holds it (8 rows x 4
+plane bytes, `movep`), in 2,048 direct-mapped slots (key: code, palette, flip x; and the palette's table epoch, which
+`lut_build` counts, so a colour change makes them stale); a hit copies 8 rows instead.  Exact (`sprite_test.py`,
+`render_test.py` four scenes; `-D MO_BLACKSH=0` unchanged).  `render_test.py` (mean / max a picture): attract
+374.2k / 7.14M -> 359.7k / 5.41M, seed 14 level 9 291.7k / 2.76M -> 288.9k / 1.83M.  Hatari, the attract demo's
+longest pictures: the camera cuts 20 -> 13 and 25 -> 18 VBLs; the dense horde's 12-20 VBL pictures stay (the game's
+logic, ~129k cycles a tick there, and the objects).
+
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 
 STE port of MAME set `gauntlet` (rev 14; driver `atari/gauntlet.cpp`).  Unlike the other ports nothing is translated:
