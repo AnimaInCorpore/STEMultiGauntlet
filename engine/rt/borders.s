@@ -66,6 +66,12 @@
 	ifnd BD_BAND
 BD_BAND = 0
 	endc
+	ifnd BD_ACIA_HOLD
+BD_ACIA_HOLD = 0			; (1: the ACIA's interrupt masked while the top border's handler awaits its HBL with the
+	endc				;  mask lowered: a busy MIDI port must not make it miss the line.  The port defines
+					;  bd_hold_in (at the hold's start: a byte waiting in the ACIA taken, so that the next
+					;  one, coming during the hold, does not overwrite it) and bd_hold_out (after the border,
+					;  the ACIA still held: what bd_hold_in took dealt with); both keep every register)
 	ifnd BD_TB_VEC
 BD_TB_VEC = $120			; (the Timer B's vector: the port's when it moves the MFP's vector base)
 	endc
@@ -183,6 +189,11 @@ borders_handlers	macro
 timer_a:
 	tst.b	bd_ta_state
 	bne	bd_ta_chain
+	if BD_ACIA_HOLD
+	move.b	$fffffa15.w,-(sp)	; (the ACIA held off while the HBL is awaited; the mask kept on the stack: a
+	bclr	#6,$fffffa15.w		;  second handler, nested in this one's wait, must not lose it)
+	bsr	bd_hold_in
+	endc
 	move	#$2100,sr		; Enable HBL
 	stop	#$2100			; Wait for HBL
 	move	#$2700,sr		; Stop all interrupts
@@ -191,12 +202,21 @@ timer_a:
 	nop
 	endr
 	bd_top_open
+	if BD_ACIA_HOLD
+	move.b	(sp)+,$fffffa15.w	; (unmasked first: a byte that came while masked is then taken by bd_hold_out)
+	bsr	bd_hold_out
+	endc
 	rte
 bd_ta_chain:
 	subq.b	#1,bd_ta_state
 	bne	.pre			; (the first period: the reload runs on by itself)
 	movem.l	d0-d1,-(sp)
 	moveq	#8,d1
+	if BD_ACIA_HOLD
+	move.b	$fffffa15.w,-(sp)	; (the ACIA held off while the HBLs are awaited; the mask on the stack, as above)
+	bclr	#6,$fffffa15.w
+	bsr	bd_hold_in
+	endc
 	move	#$2100,sr		; (an HBL pending from before is taken here)
 .line:	stop	#$2100			; Wait for HBL
 	move.b	$fffffa1f.w,d0
@@ -208,6 +228,10 @@ bd_ta_chain:
 	nop
 	endr
 	bd_top_open
+	if BD_ACIA_HOLD
+	move.b	(sp)+,$fffffa15.w	; (unmasked first: a byte that came while masked is then taken by bd_hold_out)
+	bsr	bd_hold_out
+	endc
 	ifd DEBUG
 	cmp.b	#BD_TA_THR-3,d0		; (the HBL after the border's: started more than ~3 lines late)
 	bhi.s	.ok

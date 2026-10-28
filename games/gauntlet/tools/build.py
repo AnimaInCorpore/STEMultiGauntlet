@@ -97,6 +97,7 @@ def assemble(tag, defines):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sim", action="store_true")
+    ap.add_argument("--net", action="store_true", help="the MIDI ring's version (src/net.s): run/gauntlet_net/")
     ap.add_argument("-D", dest="defines", action="append", default=[])
     args = ap.parse_args()
     prepare()
@@ -109,8 +110,8 @@ def main():
     assets.build()                        # (src/render.s's data: tools/assets.py)
     import sound                          # build/gauntlet/sound_data.s, gauntlet_speech/_adpcm.bin (src/sound_out.s)
     sound.build(build)
-    defs = list(args.defines) + (["SIM=1"] if args.sim else [])
-    out, end = assemble("gauntlet_sim" if args.sim else "gauntlet", defs)
+    defs = list(args.defines) + (["SIM=1"] if args.sim else []) + (["NET=1"] if args.net else [])
+    out, end = assemble("gauntlet_sim" if args.sim else "gauntlet_net" if args.net else "gauntlet", defs)
     print("built %s, %d bytes; the runtime $%06X-$%06X" % (out, out.stat().st_size, 0x50000, end))
 
 

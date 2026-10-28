@@ -1,11 +1,13 @@
-# usage: midiring.ps1 [-Count 2..4] [-Prg run\gauntlet\GAUNTLET.PRG] [-Port 5001] [-Seconds 0] [-Extra "--option"]
+# usage: midiring.ps1 [-Count 2..4] [-Prg run\gauntlet_net\GAUNTLET.PRG] [-Port 5001] [-Seconds 0] [-Extra "--option"]
+#                     [-NoMaster]
 # Starts Count Hatari instances (the F030Arcade build, with --midi-net-in / --midi-net-out: src/midinet.c) cabled as
 # a MIDI ring, MIDI-Maze style: instance k's MIDI OUT goes to instance k+1's MIDI IN, the last one's to the first's.
 # Each instance runs the program from a folder of its own (run\midiring\<k>\: its GEMDOS drive C:) with its own log.
-# -Seconds > 0: stops them all after that long; else they run until closed.
+# -Seconds > 0: stops them all after that long; else they run until closed.  The network build (build.py --net)
+# needs one master: NETMASTR.CFG goes into machine 0's folder (-NoMaster: none; press F1 on one machine instead).
 # F030ARCADE (default C:\Arbeit\F030Arcade) and MSYS2 (default C:\msys64) override the tool locations.
-param([int]$Count = 2, [string]$Prg = "run\gauntlet\GAUNTLET.PRG", [int]$Port = 5001, [int]$Seconds = 0,
-      [string[]]$Extra = @())
+param([int]$Count = 2, [string]$Prg = "run\gauntlet_net\GAUNTLET.PRG", [int]$Port = 5001, [int]$Seconds = 0,
+      [string[]]$Extra = @(), [switch]$NoMaster)
 $ErrorActionPreference = "Stop"
 if ($Count -lt 2 -or $Count -gt 4) { throw "Count: 2 to 4 machines" }
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -21,6 +23,8 @@ for ($k = 0; $k -lt $Count; $k++) {
     $dir = Join-Path $root "run\midiring\$k"
     New-Item -ItemType Directory -Force $dir | Out-Null
     Copy-Item $src $dir -Force
+    Remove-Item "$dir\NETMASTR.CFG" -ErrorAction SilentlyContinue
+    if ($k -eq 0 -and -not $NoMaster) { Set-Content "$dir\NETMASTR.CFG" "master" }
     $in = $Port + $k
     $out = "127.0.0.1:" + ($Port + (($k + 1) % $Count))
     $cargs = @("--machine", "ste", "--memsize", "4", "--tos", $tos, "--fast-boot", "true", "--cpu-exact", "true",

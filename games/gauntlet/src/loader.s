@@ -6,6 +6,22 @@
 MOVER = $800				; (below every load address; neither source nor destination)
 
 	section text,code
+	ifd NET
+	moveq	#0,d7			; (-D NET: NETMASTR.CFG in the program's folder: this machine is the ring's master,
+	clr.w	-(sp)			;  d7 = 'NETM' for the runtime, src/net.s)
+	pea	netmaster(pc)
+	move	#$3d,-(sp)		; Fopen
+	trap	#1
+	addq	#8,sp
+	tst.l	d0
+	bmi.s	.nm
+	move	d0,-(sp)
+	move	#$3e,-(sp)		; Fclose
+	trap	#1
+	addq	#4,sp
+	move.l	#'NETM',d7
+.nm:
+	endc
 	clr.l	-(sp)
 	move	#$20,-(sp)		; Super
 	trap	#1
@@ -36,6 +52,10 @@ mover:
 	bgt.s	.b
 .go:	jmp	RT_BASE
 mover_end:
+	ifd NET
+netmaster:	dc.b	"NETMASTR.CFG",0
+	even
+	endc
 
 	section data,data
 	even

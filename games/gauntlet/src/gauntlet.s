@@ -72,6 +72,12 @@ BD_BAND = 1
 BD_BAND_TOP = 162			;  bottom border's event at 229)
 BD_BAND_N = 57
 BD_BAND_REG = $ffff8240+2*15		; (render.s BAND_COL)
+	ifd NET
+	ifnd NOHOLD
+BD_ACIA_HOLD = 1
+	endc
+							; (the ring's MIDI traffic: see engine/rt/borders.s)
+	endc
 BD_TB_VEC = MFP_VEC*4+8*4		; (the band's line handlers: the Timer B's vector, at $2A0 here)
 	include	"borders.s"
 
@@ -124,6 +130,9 @@ rt_hooks:				; the alphanumerics' writers' hooks (tools/patch.py HOOKS)
 
 start:
 	move	#$2700,sr
+	ifd NET
+	move.l	d7,net_boot		; (loader.s: 'NETM' when NETMASTR.CFG is there: the ring's master)
+	endc
 	lea	own_stack_top,sp
 	bsr	init_hardware
 	bsr	install_image
@@ -133,6 +142,9 @@ start:
 	bsr	init_game
 	bsr	snd_init
 	bsr	snd_out_init
+	ifd NET
+	bsr	net_init
+	endc
 	move	#$2300,sr
 render_loop:
 	tst.b	quit_flag
@@ -339,6 +351,13 @@ vbl:
 	ifnd SIM
 	borders_vbl
 	endc
+	ifd NET
+	tst.b	vbl_busy		; (the ring: a VBL while the last one still runs, let in by a handler that lowered
+	beq.s	.nr			;  the mask: only the borders' restart above; its own stack and vbl_sp untouched)
+	addq.w	#1,vbl_reentered
+	rte
+.nr:	st	vbl_busy
+	endc
 	move.l	sp,vbl_sp		; the VBL's own work on its own stack (the game's, in the arcade's video RAM, has
 	lea	vbl_stack_top,sp	; little room below the program's variables)
 	movem.l	d0-d7/a0-a6,-(sp)
@@ -346,11 +365,17 @@ vbl:
 	move.l	pictures,d0		; (the pictures: none for STARVE VBLs, the renderer gets the CPU: starving)
 	cmp.l	starve_pics,d0
 	beq.s	.st
-	move.l	d0,starve_pics
+.sc:	move.l	d0,starve_pics
 	clr.b	starve_vbls
 	sf	starving
 	bra.s	.sd
-.st:	addq.b	#1,starve_vbls
+.st:
+	ifd NET
+	move.l	frames_done,d1		; (the ring: a renderer with every frame drawn is idle, not starving: the
+	cmp.l	frames_drawn,d1		; game waits for the other machines' inputs)
+	beq.s	.sc
+	endc
+	addq.b	#1,starve_vbls
 	cmp.b	#STARVE,starve_vbls
 	blo.s	.sd
 	st	starving
@@ -366,6 +391,7 @@ vbl:
 	move.w	d0,fps_value
 .fp:
 	endc
+	ifnd NET
 	ifnd TICK50
 	subq.b	#1,tick_phase		; the arcade's 60 Hz: a sixth tick every fifth VBL, given when the game waits
 	bpl.s	.ph
@@ -375,19 +401,53 @@ vbl:
 	st	extra_tick
 .ph:
 	endc
+	endc
 	bsr	vbl_video
 	ifnd SIM
 	bsr	bd_hud_plan		; (the picture's address and the Timer B's events for this frame)
 	endc
 	bsr	vbl_inputs
+	ifd NET
+	bsr	net_vbl
+	endc
 	bsr	snd_out_vbl
 	movem.l	(sp)+,d0-d7/a0-a6
 	move.l	vbl_sp,sp
-	tst.b	in_game
-	bne.s	vbl_nested
-	tst.b	starving		; (the renderer starving: the game waits a VBL more, its tick lost)
-	beq.s	.go
+	ifd NET
+	sf	vbl_busy
+	tst.b	acia_busy		; (inside the ACIA's handler, on its stack: the threads are not switched here)
+	beq.s	.nb
 	rte
+.nb:
+	endc
+	tst.b	in_game
+	ifd NET
+	beq.s	.ig
+	addq.w	#1,net_why		; (diagnostics: the VBLs that started no tick, and why)
+	bra	vbl_nested
+.ig:
+	else
+	bne.s	vbl_nested
+	endc
+	tst.b	starving		; (the renderer starving: the game waits a VBL more, its tick lost)
+	beq.s	.ok
+	ifd NET
+	addq.w	#1,net_why+2
+	endc
+	rte
+.ok:
+	ifd NET
+	move.l	d0,-(sp)		; (the ring: a tick only when every machine's input for it is in)
+	bsr	net_tick_try
+	movem.l	(sp)+,d0
+	bne.s	.go
+	tst.b	net_due
+	bne.s	.wi
+	addq.w	#1,net_why+4
+	rte
+.wi:	addq.w	#1,net_why+6
+	rte
+	endc
 .go:	movem.l	d0-d7/a0-a6,-(sp)
 	move.l	sp,render_sp		; the picture's thread: its registers and the VBL's frame on its stack
 	st	in_game
@@ -410,6 +470,9 @@ game_resume:
 vbl_nested:				; the game's frame is still running: only its IRQ 4 (the CPU's frame is on its
 					; stack).  (The renderer starving does not pause the game here: that switch crashed
 					; on the STE, a corrupt frame at an RTE; the game only waits at its next frame start.)
+	ifd NET
+	rte				; (the ring: nothing in the middle of a frame, every machine the same)
+	endc
 	move.l	d0,-(sp)		; sound replies waiting: their IRQ 6 first, as at the frame's start (a long frame
 	move.b	snd_rtail,d0		; must not hold them: the BIOS's watchdog resets the sound CPU after ~1 s without
 	cmp.b	snd_rhead,d0		; one, and the late reply then answers the next command: $FF taken as the coins);
@@ -454,6 +517,14 @@ trap_main:
 	move.w	#$2700,-(sp)
 	bra	irq6_chain
 .go:	addq.l	#1,frames_done
+	ifd NET
+	move.l	d0,-(sp)		; (the ring: the next tick at once when it is due and its inputs are in)
+	bsr	net_tick_try
+	movem.l	(sp)+,d0
+	beq	yield
+	move	#$2400,sr
+	jmp	ARC_IRQ4
+	endc
 	ifnd TICK50
 	tst.b	extra_tick		; the sixth tick of five VBLs due: the game's IRQ 4 now (as a VBL that comes while
 	beq.s	yield			; it waits), its next frame at once
@@ -478,6 +549,14 @@ trap_queue:
 	move.w	#$2700,-(sp)
 	bra	irq6_chain
 .go:	move.l	#$40F80,2(sp)
+	ifd NET
+	move.l	d0,-(sp)
+	bsr	net_tick_try
+	movem.l	(sp)+,d0
+	beq	yield
+	move	#$2400,sr
+	jmp	ARC_IRQ4
+	endc
 	bra.s	yield
 .on:	rte
 
@@ -558,6 +637,9 @@ bank_of:
 load_bank:
 	cmp.w	cur_bank,d0
 	beq.s	.same
+	ifd NET
+	addq.w	#1,net_banks		; (diagnostics: the banks copied)
+	endc
 	move.w	d0,cur_bank
 	lea	slapstic_banks,a0
 	mulu	#$2000,d0
@@ -580,6 +662,27 @@ load_bank:
 vbl_inputs:
 	ifnd SIM
 	bsr	jagpad_poll
+	endc
+	ifd NET
+	move.b	p1_kbd,d0		; (the ring: everything this machine's player presses; the tick puts it in)
+	or.b	p1_joy,d0
+	or.b	p2_joy,d0
+	or.b	jp_in,d0
+	or.b	jp_in+1,d0
+	move.b	jp_in+2,d1		; (a pad's coin)
+	move.b	jp_coins,d2
+	move.b	d1,jp_coins
+	not.b	d2
+	and.b	d2,d1
+	and.b	#3,d1
+	beq.s	.nc
+	st	net_coin
+.nc:
+	ifd NETTEST
+	bsr	net_test_input
+	endc
+	move.b	d0,net_local
+	rts
 	endc
 	move.b	p1_kbd,d0
 	or.b	p1_joy,d0
@@ -607,7 +710,47 @@ vbl_inputs:
 
 acia_isr:
 	movem.l	d0-d2/a0,-(sp)
+	ifd NET
+.fast:	btst	#0,$fffffc00.w		; (the ring's fast path, a few hundred cycles a byte: MIDI's bytes in and out,
+	bne	.again			;  until it asks no more; a keyboard byte, a stray transmitter's interrupt, a
+	move.b	MIDI_CTRL.w,d0		;  whole packet waiting (net_process): the whole handler)
+	bpl.s	.fend
+	btst	#0,d0
+	beq.s	.ftx
+	moveq	#0,d1
+	move.b	net_rqh,d1
+	lea	net_rxq,a0
+	move.b	MIDI_DATA.w,(a0,d1.w)
+	addq.b	#1,d1
+	move.b	d1,net_rqh
+	bra.s	.fast
+.ftx:	btst	#1,d0			; (asking, no byte in: the transmitter empty, its interrupt on)
+	beq	.again
+	tst.b	net_txint
+	beq	.again			; (a stray transmitter's interrupt: midi_fast turns it off)
+	move.b	net_txt,d1
+	cmp.b	net_txh,d1
+	beq	.again			; (the queue empty: midi_fast turns the transmitter's interrupt off)
+	moveq	#0,d2
+	move.b	d1,d2
+	lea	net_txq,a0
+	move.b	(a0,d2.w),MIDI_DATA.w
+	addq.b	#1,d1
+	move.b	d1,net_txt
+	bra.s	.fast
+.fend:	tst.b	net_proc
+	bne.s	.fx
+	move.b	net_rqh,d0
+	sub.b	net_rqt,d0
+	cmp.b	#6,d0			; (a packet's bytes: through net_rx now)
+	bhs	.done
+.fx:	movem.l	(sp)+,d0-d2/a0
+	rte
+	endc
 .again:
+	ifd NET
+	bsr	midi_fast		; (the ring: MIDI's bytes into net_rxq, the next one out; MIDI's ACIA shares the
+	endc				;  interrupt: both served until neither asks)
 	ikbd_byte
 	ifd NOKBD			; (-D NOKBD: keys ignored, for unattended Hatari runs)
 	bra	.again
@@ -623,10 +766,18 @@ acia_isr:
 	bne.s	.joyk
 	tst.b	d2			; a coin key (bits 0): a count on its press
 	bmi	.again
+	ifd NET
+	cmp.b	#$3b,d1			; (F1 before the ring runs: this machine the master, NETMASTR.CFG's alternative)
+	bne.s	.nf1
+	bsr	net_make_master
+	bra	.again
+.nf1:	st	net_coin		; (the ring: this machine's player's coin, in its next packet)
+	else
 	moveq	#0,d0
 	move.b	d1,d0
 	subq.b	#6,d0
 	bsr	coin
+	endc
 	bra	.again
 .joyk:	tst.b	d2
 	bmi.s	.rel
@@ -659,13 +810,27 @@ acia_isr:
 	bra	.again
 .joy0:	move.b	d2,p2_joy
 	bra	.again
-.done:	movem.l	(sp)+,d0-d2/a0
+.done:
+	ifd NET
+	btst	#7,MIDI_CTRL.w
+	bne	.again
+	bsr	net_process		; (the packets, unless an outer one is at it: on its own stack, the mask
+	move	#$2700,sr		;  lowered: the next bytes come in meanwhile through here, nested)
+	btst	#0,MIDI_CTRL.w		; (one that came at the very end: its edge may not be seen again)
+	bne	.again
+	btst	#0,$fffffc00.w
+	bne	.again
+	endc
+	movem.l	(sp)+,d0-d2/a0
 	rte
 
 key_table:				; scancode, the bits of player 1's word (0: a coin key)
 	dc.b	$48,IN_UP,$50,IN_DOWN,$4b,IN_LEFT,$4d,IN_RIGHT
 	dc.b	$39,IN_FIRE,$2c,IN_FIRE,$1d,IN_FIRE,$38,IN_MAGIC,$2d,IN_MAGIC
 	dc.b	$06,0,$07,0,$08,0,$09,0	; 5 / 6 / 7 / 8: coin 1-4 (players 1-4)
+	ifd NET
+	dc.b	$3b,0			; F1: the ring's master (acia_isr)
+	endc
 	dc.b	0,0
 	even
 
@@ -697,6 +862,48 @@ crash_common:
 .halt:	bra.s	.halt
 
 	include	"render.s"
+	ifd NET
+	include	"net.s"
+	ifd NETTEST
+; NETTEST: this machine's player plays by itself (a coin, the start, then walking and shooting), from the VBL count
+; (each machine's own: their inputs differ and reach the others only through the ring)
+net_test_input:
+	move.l	net_tick,d1		; (by the ticks: the coin is in before the start, on every machine alike)
+	moveq	#0,d2
+	move.b	net_id,d2
+	bmi.s	.x
+	tst.b	net_run
+	beq.s	.x
+	mulu	#60,d2
+	add.l	#300,d2			; the coin from tick 300 + 60 k (net_coin: one press, sent once)
+	cmp.l	d2,d1
+	blo.s	.x
+	tst.b	net_tcoin
+	bne.s	.nc
+	st	net_tcoin
+	st	net_coin
+.nc:	add.l	#120,d2			; the start (magic) for 20 ticks from 120 later
+	sub.l	d2,d1
+	bmi.s	.x
+	cmp.l	#20,d1
+	bhs.s	.walk
+	or.b	#IN_MAGIC,d0
+	rts
+.walk:	cmp.l	#200,d1
+	blo.s	.x
+	divu	#48,d1			; a direction every 48 ticks, fire every other half of it
+	move.w	d1,d2
+	add.b	net_id,d2
+	and.w	#7,d2
+	or.b	.dirs(pc,d2.w),d0
+	swap	d1
+	cmp.w	#24,d1
+	blo.s	.x
+	or.b	#IN_FIRE,d0
+.x:	rts
+.dirs:	dc.b	IN_UP,IN_UP|IN_RIGHT,IN_RIGHT,IN_DOWN|IN_RIGHT,IN_DOWN,IN_DOWN|IN_LEFT,IN_LEFT,IN_UP|IN_LEFT
+	endc
+	endc
 	include	"sound.s"
 	include	"sound_out.s"
 	ifnd shown_pal				; (a render.s without the borders' palettes)
@@ -728,6 +935,9 @@ slapstic_banks:
 	borders_vars
 	sound_vars
 	jagpad_vars
+	ifd NET
+	net_vars_macro
+	endc
 jp_coins:	ds.b	1
 	even
 quit_flag:	ds.b	1
@@ -761,6 +971,14 @@ extra_tick:	ds.b	1
 	even
 boot_regs:	ds.l	18
 vbl_sp:		ds.l	1
+	ifd NET
+acia_sp:	ds.l	1
+acia_busy:	ds.b	1
+vbl_busy:	ds.b	1
+vbl_reentered:	ds.w	1		; (VBLs that came while the last one still ran: diagnostics)
+		ds.b	1024
+acia_stack_top:
+	endc
 		ds.b	1024
 vbl_stack_top:
 		ds.b	8192

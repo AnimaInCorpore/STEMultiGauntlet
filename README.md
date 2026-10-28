@@ -24,8 +24,9 @@ against the original, and the STE's pictures are compared with a reference rende
   everything shown, and the camera centres the players in 320 pixels.
 - **Speed:** the game logic runs at the arcade's 60 frames a second. Pictures (Hatari): about 27 a second in light
   play, 20 with a message box up; large ghost hordes drop well below 25.
-- **Networking:** not in the game yet. The emulator side is ready: the F030Arcade Hatari can link instances over
-  emulated MIDI cables (see [Testing a MIDI ring](#testing-a-midi-ring-in-hatari)).
+- **Networking:** a separate program for up to four STEs in a MIDI ring (`build.py --net`, see
+  [Networked play](#networked-play-a-midi-ring)): every machine runs the whole game in lockstep, one player each,
+  all on the arcade's shared screen. Tested with four Hatari instances over emulated MIDI cables.
 
 | | |
 |---|---|
@@ -138,23 +139,44 @@ connections are retried by themselves, so the instances can start in any order. 
 each in its own folder `run/midiring/<k>/`:
 
 ```bash
+python games/gauntlet/tools/build.py --net
 powershell -ExecutionPolicy Bypass -File tools/windows/midiring.ps1 -Count 4
 ```
 
-## Networked play: the plan
+## Networked play: a MIDI ring
 
-Every STE runs the whole game for all players; only the joystick inputs travel around the MIDI ring
-(deterministic lockstep, as MIDI-Maze does):
+`build.py --net` builds the ring's program (`run/gauntlet_net/GAUNTLET.PRG`, [src/net.s](games/gauntlet/src/net.s)).
+Cable up to four STEs in a ring (each MIDI OUT to the next machine's MIDI IN, the last one back to the first) and
+start the program on all of them. One machine is the master: put a file `NETMASTR.CFG` (any content) next to its
+program, or press F1 on it while the screens are still empty. Machine k is player k + 1 (Warrior, Valkyrie, Wizard,
+Elf): its keyboard, joysticks or pad and its coin keys (5-8) are that player's.
 
-1. Each game tick, every machine sends a short packet (machine id, tick number, its input) along the ring. Each
-   machine forwards the packets of the others and drops its own when it comes back.
-2. A machine runs tick N only when the inputs of all players for tick N are in, with an input delay of 2-3 ticks to
-   hide the latency (about 5 ms around a ring of four; the traffic is about 1 KB/s of MIDI's 3 KB/s).
-3. The game's ticks are then driven by the agreed inputs, never dropped or delivered mid-frame as the single-machine
-   runtime does today. Coins and starts are inputs too; machine 1 sends the DIP settings and the high scores at the
-   start. A checksum of the game's state now and then detects a machine that went out of step.
-4. Later: a view of its own per player. The arcade keeps all players on one shared screen, so this needs changes to
-   the game's own logic.
+How it works (deterministic lockstep, as MIDI-Maze does): every STE runs the whole game; only the inputs travel.
+
+1. The master sends HELLO around the ring every half second; each machine takes the hops as its number and passes it
+   on. When HELLO comes back the master knows the ring's size and sends START; every machine starts the game at its
+   tick 0. (Packets sent before a cable is connected are lost; once HELLO went round, every cable works.)
+2. The game advances in ticks (60 a second, the arcade's frames). Every machine sends its input for the tick 3
+   ahead of the one it runs, as a 6-byte packet that also carries the tick before (a lost packet is made good by
+   the next one) and a checksum; each machine passes on the others' packets and drops its own when it comes back. A tick starts only when every machine's input for it is in and the game waits
+   for its next frame: a VBL that comes while a frame runs is not passed on, so the same inputs give every machine
+   the same game (the arcade's long frames, a maze being built, just take longer). Coins travel as inputs.
+3. Two packets lost in a row stall the ring; after 8 VBLs waiting for inputs every machine sends its inputs of the
+   last few ticks again (every other one: each packet carries two).
+4. The MIDI interrupt only moves bytes (a few hundred cycles each): received ones into a ring, the next one out.
+   Whole packets are handled on a stack of their own with the mask at 3, so the border timers and the VBL keep
+   their timing; the top border's handler holds the ACIA off while it waits for its line (`BD_ACIA_HOLD`) and
+   takes a byte that came meanwhile.
+
+Checked with four Hatari instances (`-D NETTEST`: each machine's player plays by itself): the four machines' game
+RAM, palette and video RAM are identical at ticks 1500, 3000 and later (but for the stack's dead area below the
+game's stack pointer). Speed in that test, four players in a crowded maze: about 36 ticks and 11 pictures a
+second on every machine (one STE alone: 60 ticks). The ring's MIDI work takes about 18% of each machine's time.
+`-D NET_DELAY=n` sets the input lead (default 3 ticks).
+
+Not yet: a view of its own per player (the arcade keeps all players on one shared screen; the game's own logic
+decides who is shown), a check of the game's state over the ring (a machine that went out of step), the DIP
+settings and high scores sent by the master, and a message on the screen while the ring is being set up.
 
 ## Repository layout
 
