@@ -79,6 +79,20 @@ a picture that took a light change checks again at the next picture (`mo_recheck
 pictures).  The render harness counts a VBL a picture (`render_test.s`), as nothing calls `vbl_video` there.
 Exact (`sprite_test.py`, `render_test.py` four scenes); the horde scene's cost unchanged (296.9k a picture).
 
+2026-10-28: **one set of colours a page.**  The STE's hardware palette is DB15 + 1 throughout; what changed with the
+arcade's colours was the mapping of its pens onto those 16, with freeze rules for colour cycling and fades.  Now the
+colours are taken whole with a page or level and held until the next one (`pal_update` `.box`): a page coming back
+from black stays black until its colours are still for `FADE_STILL` (8) VBLs (a fade-in left out: black, then the
+whole page); a large change in play is taken once it stays (`PAGE_STILL`); between pages `pal_range_frz` takes only
+pens not yet shown (no colour cycling, no flashes: a hit's 2-frame white flash is never taken); for `FRZ_SETTLE` (4)
+VBLs after a page every pen is taken again (a flash caught at the take undone).  The playfield's red pulse (palette
+10 = tile palette 2, pens 9-13, a pulse of 10 frames) is drawn in colour 15 (`PULSE_COL`, free in play: the title's
+band uses it only while the panel is down), set every VBL from the average of the five pens (`pulse_col`).  The maze
+tiles of levels 1-9 use only tile palettes 0, 1 and the exit (tile palette 2, pens 0 and 7), so neither the pulse nor
+the grey ramps (palette 11) show there.  The game never reads its palette: none of this touches play.  Exact
+(`sprite_test.py`, `render_test.py` five scenes); the horde scene 296.9k -> 285.6k cycles a picture (no redraws for
+colour cycling).  The text's pens are taken every picture as before (their blinking).
+
 ### The ghost horde
 
 2026-10-28, Hatari (the attract demo's densest horde, VBLs 2250-2750, the build with black shadows and the tile

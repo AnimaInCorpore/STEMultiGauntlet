@@ -410,7 +410,68 @@ vbl_video:
 	movem.l	flip_pal,d0-d7		; (the picture's palette: the maze's; the bar keeps its own)
 	movem.l	d0-d7,shown_pal
 	move.b	flip_band,shown_band
-.done:	bra	band_build
+	move.b	flip_pulse,shown_pulse
+.done:	tst.b	shown_pulse		; the red pulse, every VBL
+	beq.s	.npl
+	bsr	pulse_col
+	move.w	d0,shown_pal+2*PULSE_COL
+.npl:	bra	band_build
+
+; pulse_col: the red pulse's colour now: the average of its pens' 4-bit channels (ir4), as an STE word.  Keeps all but d0.
+pulse_col:
+	movem.l	d1-d7/a0-a1,-(sp)
+	lea	ARC_PALETTE+PULSE_PEN*2,a0
+	lea	ir4,a1
+	moveq	#0,d1			; the sums: red, green, blue
+	moveq	#0,d2
+	moveq	#0,d3
+	moveq	#PULSE_N-1,d6
+.p:	move.w	(a0)+,d0		; I R G B
+	move.w	d0,d4
+	rol.w	#4,d4
+	and.w	#15,d4
+	lsl.w	#4,d4			; I << 4
+	moveq	#0,d7
+	move.w	d0,d5
+	lsr.w	#8,d5
+	and.w	#15,d5
+	or.w	d4,d5
+	move.b	(a1,d5.w),d7
+	add.w	d7,d1
+	move.w	d0,d5
+	lsr.w	#4,d5
+	and.w	#15,d5
+	or.w	d4,d5
+	move.b	(a1,d5.w),d7
+	add.w	d7,d2
+	move.w	d0,d5
+	and.w	#15,d5
+	or.w	d4,d5
+	move.b	(a1,d5.w),d7
+	add.w	d7,d3
+	dbf	d6,.p
+	moveq	#0,d0
+	move.w	d1,d4			; red: the sum / 5 (* 13 / 64) as an STE nibble ((c >> 1) | (c & 1) << 3)
+	bsr.s	.ste
+	move.w	d4,d0
+	lsl.w	#4,d0
+	move.w	d2,d4
+	bsr.s	.ste
+	or.w	d4,d0
+	lsl.w	#4,d0
+	move.w	d3,d4
+	bsr.s	.ste
+	or.w	d4,d0
+	movem.l	(sp)+,d1-d7/a0-a1
+	rts
+.ste:	mulu	#13,d4
+	lsr.w	#6,d4
+	move.w	d4,d5
+	lsr.w	#1,d4
+	and.w	#1,d5
+	lsl.w	#3,d5
+	or.w	d5,d4
+	rts
 
 ; ---------------------------------------------------------------------------------------------------------------------
 render_frame:
@@ -655,7 +716,12 @@ render_done:
 	movem.l	(a0),d0-d7
 .fp:	movem.l	d0-d7,flip_pal
 	move.b	band_mode,flip_band
-	tst.b	blackout		; (no band on a black picture)
+	tst.b	blackout		; (the red pulse on PULSE_COL: not on a black picture, not on the title's band)
+	seq	flip_pulse
+	tst.b	band_mode
+	beq.s	.fpu
+	sf	flip_pulse
+.fpu:	tst.b	blackout		; (no band on a black picture)
 	beq.s	.fb
 	sf	flip_band
 .fb:	st	frame_ready
@@ -674,11 +740,33 @@ pal_update:
 	beq.s	.nh
 	subq.w	#1,scene_hold
 .nh:	tst.b	blackout		; the arcade's palette all black (between pages): the picture black at once, the
-	beq	.nbo			; colours kept until it comes back, then all taken at once (no staged fade)
-	bsr	pal_black
-	bne.s	.box
+	beq	.nbo			; colours kept until it comes back and stays still for FADE_STILL VBLs, then all
+	bsr	pal_black		; taken at once (a fade-in left out: black, then the whole page)
+	bne.s	.lit
+	move.w	rf_vbls+2,bo_moved	; (still black)
+	rts
+.lit:	lea	ARC_PALETTE+$200,a0	; (the objects' and the playfield's pens: moving still?)
+	moveq	#MO_FREEZE,d5
+	lea	mo_large,a2
+	bsr	pal_look
+	lea	ARC_PALETTE+$400,a0
+	moveq	#PF_FREEZE,d5
+	lea	pf_large,a2
+	bsr	pal_look
+	move.b	mo_large,d0
+	or.b	pf_large,d0
+	sf	mo_large
+	sf	pf_large
+	tst.b	d0
+	beq.s	.lst
+	move.w	rf_vbls+2,bo_moved
+.lst:	move.w	rf_vbls+2,d0
+	sub.w	bo_moved,d0
+	cmp.w	#FADE_STILL,d0
+	bhs.s	.box
 	rts
 .box:	sf	blackout
+	move.w	rf_vbls+2,take_vbl	; (FRZ_SETTLE VBLs more: every pen taken again, see .nbo)
 	sf	page_pend
 	tst.w	panel_open
 	beq.s	.bou
@@ -843,7 +931,14 @@ pal_update:
 	blo	.sets
 	clr.w	scene_quiet
 	bsr	scene_check
-.sets:
+.sets:	move.w	rf_vbls+2,d0		; (just after a page was taken: every pen again, so a short change it caught, a
+	sub.w	take_vbl,d0		;  hit's white flash, is undone at once)
+	cmp.w	#FRZ_SETTLE,d0
+	bhs.s	pal_sets
+	lea	ARC_PALETTE+$200,a0
+	lea	pal_shadow+$200,a1
+	move.w	#512/2,d4
+	bsr	pal_range
 pal_sets:				; (the sets whose pens changed: dealt with)
 	lea	set_mask,a4
 	moveq	#0,d7			; the set
@@ -858,12 +953,16 @@ pal_sets:				; (the sets whose pens changed: dealt with)
 	rts
 ; pal_range_frz: as pal_range, but colour cycling left out: unless a large change came since its last call (the byte at
 ; a2: pal_look notes it), only the pens that were dark (no brightness or no colour: not yet shown) are taken; the others
-; keep their colours (their copies stay different: a large change later takes them too).  The first picture takes all.
-; For FRZ_SETTLE VBLs after a large change every pen is taken too (the VBL count's low word at a2 + 2): a short change
-; the large one caught (a hit's white flash, 2 frames) is undone at once instead of staying until the next large one.
+; keep their colours: the colours are taken whole only with a page (after a blackout, or a large change in play
+; once it is still: pal_update .box), held until the next one (2026-10-28: no fades, no colour cycling, no flashes;
+; the red pulse runs on colour PULSE_COL, pulse_col).  The first picture takes all.
 	ifnd FRZ_SETTLE
-FRZ_SETTLE = 4
+FRZ_SETTLE = 4				; (VBLs after a page was taken in which every pen is taken again)
 	endc
+FADE_STILL = 8				; (VBLs without a large change before a page coming back from black is taken)
+PULSE_PEN = $2A9			; the playfield's red pulse (palette 10, pens 9-13): one colour, their average
+PULSE_N = 5
+PULSE_COL = 15				; (the free colour: the title's band uses it only while the panel is down)
 MO_ARM = 48				; (longs changed in one picture that make the scene check look: another scene, maybe)
 MO_STILL = 16				; (the panel down: pictures without a large change of the objects' colours before
 					;  they are taken, once)
@@ -873,16 +972,7 @@ PF_FREEZE = 8				;  shimmer is less) (the playfield's: its flickering and pulsin
 pal_range_frz:
 	tst.w	pal_tick
 	beq	pal_range
-	tst.b	(a2)
-	beq.s	.small
-	sf	(a2)
-	move.w	rf_vbls+2,2(a2)
-	move.w	#SCENE_DUE,scene_due	; (a new scene, maybe: its palette chosen in the next checks)
-	bra	pal_range		; (a large change: every pen)
-.small:	move.w	rf_vbls+2,d0
-	sub.w	2(a2),d0
-	cmp.w	#FRZ_SETTLE,d0
-	blo	pal_range		; (just after a large change: every pen)
+	sf	(a2)			; (a large change is not taken here)
 	move.w	d4,d6
 	add.w	d6,d6
 	subq.w	#1,d6
@@ -1012,7 +1102,13 @@ pen_remap:
 	endc
 	move.l	scene_pab_p,a3
 	move.b	(a3,d3.w),d5
-	tst.b	band_mode		; (a band pen on the title: the band's colour)
+	cmp.w	#PULSE_PEN,d0		; (the red pulse: colour PULSE_COL, set every VBL)
+	blo.s	.npu
+	cmp.w	#PULSE_PEN+PULSE_N,d0
+	bhs.s	.npu
+	move.b	#PULSE_COL*$11,d5
+	bra.s	.set
+.npu:	tst.b	band_mode		; (a band pen on the title: the band's colour)
 	beq.s	.set
 	move.w	d0,d7
 	sub.w	#$100,d7
@@ -5519,6 +5615,8 @@ page_pend:	ds.b	1		; (play: a large colour change waiting to stay)
 page_wait:	ds.w	1
 flip_band:	ds.b	1		; (the published picture's band_mode)
 shown_band:	ds.b	1		; (the shown picture's)
+flip_pulse:	ds.b	1		; (the published picture shows the red pulse)
+shown_pulse:	ds.b	1
 mo_down:	ds.b	1		; (the panel was down: the objects' colours all taken when it comes up)
 	even
 scene_idx_p:	ds.l	1
@@ -5537,9 +5635,11 @@ mo_copy:	ds.l	MO_COPY_LONGS	; (mo_ram_same: the general walk's input)
 pal_shadow:	ds.w	768
 pal_seen:	ds.w	768		; (pal_look: the pens as the last picture saw them)
 	even
+bo_moved:	ds.w	1		; (the VBL of the last large change while coming back from black)
+take_vbl:	ds.w	1		; (the VBL a page's colours were taken)
 mo_large:	ds.b	1		; (pal_look: a large change of the objects' pens since they were taken)
 		ds.b	1
-		ds.w	1		; (pal_range_frz: the VBL of the last large change)
+		ds.w	1		; (unused)
 pf_large:	ds.b	1		; (and of the playfield's)
 		ds.b	1
 		ds.w	1
