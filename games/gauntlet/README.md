@@ -96,11 +96,17 @@ smaller steps (at most 4 and 3 ticks a picture against 6) but the game at 32% of
 same long gaps (`-D STARVE=n`, the dense horde 9.9 / 9.9 / 10.9 pictures a second).
 
 Not tried yet, in the order of their likely return:
-* the monster loop and its probes natively (the same results, `tools/logic_test.py` VBL for VBL), the largest part;
-* the flip wait used: the next picture's work that does not touch the ring (the object list, bakes, prepared
-  streams, new tiles into P) done before waiting;
-* `jagpad_poll` only when a pad answered, or less often;
-* the restores per row of each object's own words (as its draw) instead of its whole rectangle.
+* the monster loop and its probes rewritten (the same results, `tools/logic_test.py` VBL for VBL): it already runs
+  natively, so only tighter code gains, ~745 cycles an object now, perhaps ~450: ~20k a tick, ~6% a picture;
+* the restores per row of each object's own words (as its draw) instead of its whole rectangle;
+* the objects' list and records (~100 objects a picture, ~150-250 cycles each in every one of `mo_snapshot`,
+  `mo_place`, `mo_record`, `touch`, `mo_image`, `mo_object`: no single hot spot; a rewrite with the fields in
+  registers might save 30-40k a picture).
+
+Done: `jagpad_poll` (`engine/rt/jagpad.s`) first reads the four rows once and, with every line idle, clears `jp_in`
+at once: the horde 16.0k -> 2.6k cycles a picture (the same 500 VBLs: 78 pictures and 243 ticks against 70 and 228,
+partly the runs' scatter).  The flip wait is no use as it stands: the next picture's state exists only after the
+VBL that ends it (the game's tick runs from there), and what does not depend on it (`pf_update` ~11k) is too little.
 
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 

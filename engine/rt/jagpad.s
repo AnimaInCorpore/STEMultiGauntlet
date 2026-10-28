@@ -100,9 +100,34 @@ jagpad_poll:
 	tst.b	jp_present
 	beq	.out\@
 	movem.l	d0-d5/a0-a1,-(sp)
+	lea	$ffff9202.w,a0
+	; nothing held (the usual case): every row's lines idle, jp_in 0 at once (~250 cycles instead of ~2,300)
+	move.w	#$ffee,(a0)		; row 0: fire A and Pause (bits 0-3)
+	move.w	-2(a0),d0
+	or.w	#$fff0,d0
+	move.w	(a0),d1
+	move.w	#$ffdd,(a0)		; rows 1-3: their fire lines (bits 1 and 3) and row lines
+	move.w	-2(a0),d4
+	and.w	(a0),d1
+	move.w	#$ffbb,(a0)
+	and.w	-2(a0),d4
+	and.w	(a0),d1
+	move.w	#$ff77,(a0)
+	and.w	-2(a0),d4
+	and.w	(a0),d1
+	move.w	#$ffff,(a0)
+	or.w	#$fff5,d4
+	and.w	d4,d0
+	or.w	#$00ff,d1
+	and.w	d1,d0
+	addq.w	#1,d0			; ($FFFF: idle)
+	bne.s	.held\@
+	clr.l	jp_in
+	movem.l	(sp)+,d0-d5/a0-a1
+	rts
+.held\@:
 	moveq	#0,d2			; pad A buttons
 	moveq	#0,d3			; pad B buttons
-	lea	$ffff9202.w,a0
 
 	move.w	#$ffee,(a0)		; row 0: directions, A, Pause
 	move.w	-2(a0),d0
