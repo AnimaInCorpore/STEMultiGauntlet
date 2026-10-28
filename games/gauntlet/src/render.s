@@ -91,7 +91,19 @@ SPR_POOL_END = $3C0000
 AL = 160				; AIMG's bytes a line
 AL_N = 1200				; (30 rows x 40 characters)
 
-DMG_MAX = 160
+KO_MAX = 192				; a ring's objects as drawn last (RS_DMG): key and rectangle, mo_match / mo_draw
+KO_CODE = 0				; the record's words 0-2, its palette's epoch, its place in the ring (pixel x, line
+KO_W1 = 2				; of its top), its rows: equal keys draw equal pixels at the same ring address
+KO_W2 = 4
+KO_EP = 6
+KO_RX = 8
+KO_RL = 10
+KO_R0 = 12
+KO_R1 = 14
+KO_RECT = 16				; ring column.w, columns.w, line.w, lines.w (what it covers)
+KO_SIZE = 24
+DMG_MAX = KO_MAX*KO_SIZE*2/8		; (RS_DMG holds the two lists, RS_KOFF: the current one's offset)
+MK_ROWS = 112				; the written cells: 8 ring lines x 64 columns a row (mk_bits)
 OVL_MAX = 64
 PEND_MAX = 600
 OV_C0 = 0				; an overlay rectangle: characters c0 .. c1 - 1 (0-39), lines y0 .. y1
@@ -130,7 +142,8 @@ RS_SAL = RS_TRN+2			; what the ring's last picture was drawn of (pic_same): al_c
 RS_SCOL = RS_SAL+4			;   col_epoch.w, the objects' checksum (mo_hash).l, valid.w
 RS_SMO = RS_SCOL+2
 RS_SOK = RS_SMO+4
-RS_SIZE = RS_SOK+2
+RS_KOFF = RS_SOK+2			; (the ring's list in RS_DMG: 0 or KO_MAX x KO_SIZE)
+RS_SIZE = RS_KOFF+2
 
 BLT_HT = $ffff8a00
 BLT_SXI = $ffff8a20
@@ -172,6 +185,7 @@ init_video:
 	bsr	ring_reset
 	lea	ring_state1,a0
 	bsr	ring_reset
+	bsr	mk_init
 	; every pen mapped, every set's tables made; the copies of the video RAM differ from it everywhere
 	lea	ARC_PALETTE,a0
 	lea	pal_shadow,a1
@@ -402,6 +416,7 @@ ring_reset:
 	clr.w	RS_POVF(a0)
 	clr.w	RS_TRN(a0)
 	clr.w	RS_SOK(a0)
+	clr.w	RS_KOFF(a0)
 	lea	RS_TR+TR_NW(a0),a1
 	moveq	#30-1,d0
 .tr:	clr.w	(a1)
@@ -553,9 +568,10 @@ render_frame:
 	move.w	t2_total,d0
 	or.w	RS_TRN(a0),d0
 	sne	tr_on
+	bsr	mo_match		; (this picture's objects against the ring's: mk_on when one may stay)
 	bsr	ring_validate
 	bsr	tr_restore
-	bsr	dmg_restore
+	bsr	mo_restore		; (the ring's objects not drawn again the same way: copied back from P)
 	bsr	ovl_restore_old
 	bsr	pend_apply
 	bsr	mo_draw
@@ -2816,11 +2832,15 @@ ovl_classify:
 .nn:	dbf	d7,.n
 .done:	rts
 
-; touch: ring columns d0.w (+ d1.w) x lines d2.w (+ d3.w) are written: the kept overlay rectangles there are drawn
-; again in those lines.  Keeps d0-d7/a0-a6 but a5.
+; touch: ring columns d0.w (+ d1.w) x lines d2.w (+ d3.w) are written: their cells marked (an unchanged object there
+; is drawn again: mo_draw), the kept overlay rectangles there are drawn again in those lines.  Keeps d0-d7/a0-a6 but
+; a5.
 touch:
-	movem.l	d4-d7/a2,-(sp)
-	tst.b	tr_on			; (no transparent characters in the picture or the ring: no rows to note)
+	movem.l	d4-d7/a0/a2,-(sp)
+	tst.b	mk_on			; (no object may stay: no cells to note)
+	beq.s	.nm
+	bsr	mk_mark
+.nm:	tst.b	tr_on			; (no transparent characters in the picture or the ring: no rows to note)
 	beq.s	.to
 	move.w	d2,d4			; the picture's character rows these lines cover: written (tr_touch)
 	sub.w	top_t,d4
@@ -2872,8 +2892,128 @@ touch:
 	move.w	d5,OV_DHI(a2)
 .nx:	lea	OV_SIZE(a2),a2
 .nn:	dbf	d7,.n
-	movem.l	(sp)+,d4-d7/a2
+	movem.l	(sp)+,d4-d7/a0/a2
 	rts
+
+; mk_clear: no cell written (mk_bits)
+mk_clear:
+	movem.l	d0-d7/a1-a6,-(sp)
+	lea	mk_bits+MK_ROWS*8,a0
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	moveq	#0,d3
+	moveq	#0,d4
+	moveq	#0,d5
+	moveq	#0,d6
+	moveq	#0,d7
+	move.l	d0,a1
+	move.l	d0,a2
+	move.l	d0,a3
+	move.l	d0,a4
+	move.l	d0,a5
+	move.l	d0,a6
+	rept	MK_ROWS*8/56
+	movem.l	d0-d7/a1-a6,-(a0)
+	endr
+	movem.l	(sp)+,d0-d7/a1-a6
+	rts
+
+; mk_setup: ring columns d0.w (+ d1.w) x lines d2.w (+ d3.w) -> their cells: d4 / d5 the columns 0-31 / 32-63 (the
+; first the highest bit), a0 the first cell row's marks, d6 the cell rows - 1; N when none.  Keeps d0-d3, uses d7.
+mk_setup:
+	tst.w	d1
+	ble.s	.no
+	tst.w	d3
+	ble.s	.no
+	move.w	d0,d7			; c0
+	bpl.s	.c0
+	moveq	#0,d7
+.c0:	cmp.w	#64,d7
+	bge.s	.no
+	move.w	d0,d6
+	add.w	d1,d6			; c1, the end
+	ble.s	.no
+	cmp.w	#64,d6
+	bls.s	.c1
+	moveq	#64,d6
+.c1:	lsl.w	#3,d7
+	lsl.w	#3,d6
+	lea	mk_from,a0		; columns c0 .. 63 and not c1 .. 63
+	move.l	(a0,d7.w),d4
+	move.l	4(a0,d7.w),d5
+	move.l	(a0,d6.w),d7
+	not.l	d7
+	and.l	d7,d4
+	move.l	4(a0,d6.w),d7
+	not.l	d7
+	and.l	d7,d5
+	move.w	d2,d6
+	bpl.s	.y0
+	moveq	#0,d6
+.y0:	lsr.w	#3,d6			; the first cell row
+	move.w	d2,d7
+	add.w	d3,d7
+	subq.w	#1,d7
+	bmi.s	.no
+	lsr.w	#3,d7			; the last
+	cmp.w	#MK_ROWS-1,d7
+	bls.s	.y1
+	move.w	#MK_ROWS-1,d7
+.y1:	sub.w	d6,d7
+	bmi.s	.no
+	lea	mk_bits,a0
+	lsl.w	#3,d6
+	add.w	d6,a0
+	move.w	d7,d6			; (N clear)
+	rts
+.no:	moveq	#-1,d6			; (N set)
+	rts
+
+; mk_init: mk_from: per column c (0-64) the columns c .. 63 as two longs (mk_setup)
+mk_init:
+	lea	mk_from,a0
+	moveq	#0,d0
+.i:	moveq	#-1,d1
+	lsr.l	d0,d1			; columns c .. 31 (c >= 32: none, the count taken modulo 64)
+	moveq	#-1,d2
+	move.w	d0,d3
+	sub.w	#32,d3
+	ble.s	.l
+	lsr.l	d3,d2			; columns c .. 63
+.l:	cmp.w	#64,d0
+	bne.s	.s
+	moveq	#0,d1
+	moveq	#0,d2
+.s:	move.l	d1,(a0)+
+	move.l	d2,(a0)+
+	addq.w	#1,d0
+	cmp.w	#64,d0
+	bls.s	.i
+	rts
+
+; mk_mark: the cells of ring columns d0.w (+ d1.w) x lines d2.w (+ d3.w) written.  Keeps d0-d3/a1-a6.
+mk_mark:
+	bsr	mk_setup
+	bmi.s	.x
+.m:	or.l	d4,(a0)+
+	or.l	d5,(a0)+
+	dbf	d6,.m
+.x:	rts
+
+; mk_test: Z clear when a cell of ring columns d0.w (+ d1.w) x lines d2.w (+ d3.w) was written.  Keeps d0-d3/a1-a6.
+mk_test:
+	bsr	mk_setup
+	bmi.s	.none
+.t:	move.l	(a0)+,d7
+	and.l	d4,d7
+	bne.s	.x
+	move.l	(a0)+,d7
+	and.l	d5,d7
+	bne.s	.x
+	dbf	d6,.t
+.none:	moveq	#0,d7			; (Z set)
+.x:	rts
 
 ; ---------------------------------------------------------------------------------------------------------------------
 ; ring_validate: the ring's valid rectangle covers the picture (columns w0 .. w0 + 20, lines T .. T + 239):
@@ -3067,52 +3207,195 @@ copy_piece:
 	bra	blit_go_copy
 
 ; ---------------------------------------------------------------------------------------------------------------------
-; dmg_restore: the ring's damage (objects, transparent characters) copied back from P
-dmg_restore:
+; mo_match: this picture's records against the ring's objects as drawn last (its list: RS_NDMG entries of KO_SIZE at
+; ko_oldp, one of the ring's two lists): the other list (ko_newp) gets each record's key and rectangle, mo_kidx the old
+; entry with the same key (-1: none; each old entry matches once).  mk_on when one matched (the cells written from
+; now on noted).  More records than KO_MAX: the new list's last entry is the whole guarded window (never matched: all
+; copied back next time).
+mo_match:
+	addq.b	#1,ko_stamp		; (a slot of the hash is this picture's when its high byte is the stamp)
+	bne.s	.st
+	lea	ko_hash,a0
+	move.w	#256-1,d0
+.cl:	clr.w	(a0)+
+	dbf	d0,.cl
+	move.b	#1,ko_stamp
+.st:	sf	mk_on
 	move.l	cur_ring,a3
 	lea	RS_DMG(a3),a4
+	lea	RS_DMG(a3),a5
+	move.w	RS_KOFF(a3),d0
+	add.w	d0,a4			; the old list
+	eor.w	#KO_MAX*KO_SIZE,d0
+	add.w	d0,a5			; the new one
+	move.l	a4,ko_oldp
+	move.l	a5,ko_newp
 	move.w	RS_NDMG(a3),d7
-	clr.w	RS_NDMG(a3)
-	bra	.n
-.d:	movem.w	(a4)+,d0-d3
-	move.l	a4,-(sp)
-	move.w	d7,-(sp)
+	lea	ko_used,a1
+	lea	ko_hash,a0
+	moveq	#0,d5
+	move.b	ko_stamp,d5
+	lsl.w	#8,d5			; (a slot: stamp << 8 | index + 1)
+	moveq	#0,d6			; i
+	bra.s	.hn
+.h:	clr.b	(a1,d6.w)
+	move.w	KO_RL(a4),d0		; slot: (line << 3 ^ x ^ code) & 255
+	lsl.w	#3,d0
+	move.w	KO_RX(a4),d1
+	eor.w	d1,d0
+	move.w	(a4),d1
+	eor.w	d1,d0
+	and.w	#255,d0
+	add.w	d0,d0
+.hp:	move.w	(a0,d0.w),d1
+	clr.b	d1
+	cmp.w	d5,d1
+	bne.s	.hput
+	addq.w	#2,d0
+	and.w	#511,d0
+	bra.s	.hp
+.hput:	move.w	d6,d1
+	addq.w	#1,d1
+	or.w	d5,d1
+	move.w	d1,(a0,d0.w)
+	lea	KO_SIZE(a4),a4
+	addq.w	#1,d6
+.hn:	cmp.w	d7,d6
+	blo.s	.h
+	; the new records' keys, rectangles and matches
+	move.l	ko_oldp,a3
+	lea	mo_epoch,a4
+	lea	mo_recs,a6
+	lea	mo_kidx,a2
+	move.w	mo_n,d7
+	cmp.w	#KO_MAX,d7
+	bls.s	.nk
+	move.w	#KO_MAX,d7
+.nk:	bra	.kn
+.k:	move.l	MR_CODE(a6),(a5)	; (the code, word 1)
+	move.w	MR_W2(a6),KO_W2(a5)
+	moveq	#15,d0
+	and.w	MR_W1(a6),d0
+	moveq	#0,d1
+	move.b	(a4,d0.w),d1
+	move.w	d1,KO_EP(a5)
+	move.l	MR_R0(a6),KO_R0(a5)	; (r0, r1)
+	move.w	MR_X(a6),d0
+	add.w	tg_r0,d0		; its ring pixel
+	move.w	d0,KO_RX(a5)
+	move.w	MR_Y(a6),d1
+	add.w	tg_t,d1			; its top's ring line
+	move.w	d1,KO_RL(a5)
+	move.w	d0,d2			; the rectangle: columns x >> 4 .. (x + W - 1) >> 4 (mo_strip_draw's damage, all
+	asr.w	#4,d2			; its strips), lines top + r0 .. top + r1
+	move.w	d2,KO_RECT(a5)
+	and.w	#15,d0
+	moveq	#$38,d3
+	and.w	MR_W2(a6),d3
+	addq.w	#7,d3			; W - 1: 8 x tiles - 1
+	add.w	d3,d0
+	lsr.w	#4,d0
+	addq.w	#1,d0
+	move.w	d0,KO_RECT+2(a5)
+	move.w	MR_R0(a6),d0
+	add.w	d0,d1
+	move.w	d1,KO_RECT+4(a5)
+	move.w	MR_R1(a6),d1
+	sub.w	d0,d1
+	addq.w	#1,d1
+	move.w	d1,KO_RECT+6(a5)
+	; an equal old entry not matched yet
+	move.w	#-1,(a2)
+	move.w	KO_RL(a5),d0
+	lsl.w	#3,d0
+	move.w	KO_RX(a5),d1
+	eor.w	d1,d0
+	move.w	(a5),d1
+	eor.w	d1,d0
+	and.w	#255,d0
+	add.w	d0,d0
+.lk:	move.w	(a0,d0.w),d1
+	move.w	d1,d2
+	clr.b	d2
+	cmp.w	d5,d2
+	bne.s	.lx			; (an empty slot)
+	and.w	#255,d1
+	subq.w	#1,d1			; the old index
+	move.w	d1,d2
+	add.w	d2,d2
+	add.w	d1,d2
+	lsl.w	#3,d2			; (x KO_SIZE)
+	lea	(a3,d2.w),a1
+	move.l	(a1)+,d3
+	cmp.l	(a5),d3
+	bne.s	.ln
+	move.l	(a1)+,d3
+	cmp.l	4(a5),d3
+	bne.s	.ln
+	move.l	(a1)+,d3
+	cmp.l	8(a5),d3
+	bne.s	.ln
+	move.l	(a1),d3
+	cmp.l	12(a5),d3
+	bne.s	.ln
+	lea	ko_used,a1
+	tst.b	(a1,d1.w)
+	bne.s	.ln
+	st	(a1,d1.w)
+	move.w	d1,(a2)
+	st	mk_on
+	bra.s	.lx
+.ln:	addq.w	#2,d0
+	and.w	#511,d0
+	bra.s	.lk
+.lx:	lea	KO_SIZE(a5),a5
+	addq.l	#2,a2
+	lea	MR_SIZE(a6),a6
+.kn:	dbf	d7,.k
+	cmp.w	#KO_MAX,mo_n		; (more records than the list holds: its last entry the whole guarded window)
+	bls.s	.nf
+	move.l	ko_newp,a5
+	lea	(KO_MAX-1)*KO_SIZE(a5),a5
+	move.w	#-1,(a5)
+	move.w	#-1,KO_EP(a5)		; (no record has this key)
+	move.w	w0,d0
+	sub.w	#MCOL,d0
+	move.w	d0,KO_RECT(a5)
+	move.w	#25,KO_RECT+2(a5)
+	move.w	top_t,d0
+	sub.w	#GUARD,d0
+	move.w	d0,KO_RECT+4(a5)
+	move.w	#240+2*GUARD,KO_RECT+6(a5)
+	move.w	#-1,mo_kidx+(KO_MAX-1)*2
+.nf:	tst.b	mk_on			; (an object may stay: the cells written from now on noted)
+	beq.s	.x
+	bsr	mk_clear
+.x:	rts
+
+; mo_restore: the ring's objects that no record of this picture matched (mo_match): copied back from P
+mo_restore:
+	move.l	cur_ring,a3
+	move.w	RS_NDMG(a3),d7
+	move.l	ko_oldp,a4
+	moveq	#0,d6
+	bra.s	.rn
+.r:	lea	ko_used,a0
+	tst.b	(a0,d6.w)
+	bne.s	.rk
+	movem.w	KO_RECT(a4),d0-d3
+	movem.l	d6-d7/a4,-(sp)
 	bsr	copy_rect_s
-	move.w	(sp)+,d7
-	move.l	(sp)+,a4
-.n:	dbf	d7,.d
+	movem.l	(sp)+,d6-d7/a4
+.rk:	lea	KO_SIZE(a4),a4
+	addq.w	#1,d6
+.rn:	cmp.w	d7,d6
+	blo.s	.r
 	rts
 
-; dmg_add: ring columns d0 (+ d1) x lines d2 (+ d3) are damaged (and touch the kept overlay).  Keeps d0-d7/a0-a2/a4-a6.
+; dmg_add: ring columns d0 (+ d1) x lines d2 (+ d3) are drawn (an object: the ring's list keeps its rectangle,
+; mo_draw): their cells marked, the kept overlay there drawn again.  Keeps d0-d7/a0-a2/a4-a6.
 dmg_add:
-	bsr	touch
-	move.l	a3,-(sp)
-	move.l	cur_ring,a3
-	cmp.w	#DMG_MAX,RS_NDMG(a3)
-	bhs	.full
-	move.l	d4,-(sp)
-	move.w	RS_NDMG(a3),d4
-	addq.w	#1,RS_NDMG(a3)
-	lsl.w	#3,d4
-	lea	RS_DMG(a3,d4.w),a3
-	movem.w	d0-d3,(a3)
-	move.l	(sp)+,d4
-	move.l	(sp)+,a3
-	rts
-.full:	; (no room: the whole guarded window is damaged; the last entry grows to it)
-	move.l	d4,-(sp)
-	lea	RS_DMG+(DMG_MAX-1)*8(a3),a3
-	move.w	w0,d4
-	sub.w	#MCOL,d4
-	move.w	d4,(a3)+
-	move.w	#25,(a3)+
-	move.w	top_t,d4
-	sub.w	#GUARD,d4
-	move.w	d4,(a3)+
-	move.w	#240+2*GUARD,(a3)+
-	move.l	(sp)+,d4
-	move.l	(sp)+,a3
-	rts
+	bra	touch
 
 ; ovl_restore_old: the ring's old overlay rectangles not kept: copied back from P; one of the same characters at the
 ; same lines (the ring moved) only where the new one does not cover whole words
@@ -4063,16 +4346,46 @@ mo_record:
 	move.w	d6,(a6)+
 .full:	rts
 
-; mo_draw: the records into the work ring (mo_place kept only those in the picture)
+; mo_draw: the records into the work ring (mo_place kept only those in the picture).  A record the ring has as it was
+; (mo_match: the same key, so the same pixels at the same place) is left as it is when none of its cells was written
+; this picture (copied back, tiles, an object drawn before it) and every object left so far was below it then (their
+; old order kept); else it is drawn.  Then this picture's list (ko_newp) becomes the ring's.
 mo_draw:
 	lea	mo_recs,a6
-	move.w	mo_n,d7
+	move.l	ko_newp,a5
+	lea	mo_kidx,a4
+	moveq	#-1,d5			; the last one left: its old index
+	moveq	#0,d6			; the record
 	bra	.n
-.r:	movem.l	d7/a6,-(sp)
+.r:	cmp.w	#KO_MAX-1,d6
+	bhs.s	.draw
+	move.w	(a4),d0
+	bmi.s	.draw
+	cmp.w	d5,d0
+	ble.s	.draw			; (one left before it was above it)
+	movem.w	KO_RECT(a5),d0-d3
+	movem.l	d5-d6/a4-a6,-(sp)
+	bsr	mk_test
+	movem.l	(sp)+,d5-d6/a4-a6
+	bne.s	.draw
+	move.w	(a4),d5			; left as it is
+	bra.s	.nx
+.draw:	movem.l	d5-d6/a4-a6,-(sp)
 	bsr	mo_object
-	movem.l	(sp)+,d7/a6
-	lea	MR_SIZE(a6),a6
-.n:	dbf	d7,.r
+	movem.l	(sp)+,d5-d6/a4-a6
+.nx:	lea	MR_SIZE(a6),a6
+	lea	KO_SIZE(a5),a5
+	addq.l	#2,a4
+	addq.w	#1,d6
+.n:	cmp.w	mo_n,d6
+	blo	.r
+	move.w	mo_n,d0			; this picture's list (ko_newp): the ring's
+	cmp.w	#KO_MAX,d0
+	bls.s	.c
+	move.w	#KO_MAX,d0
+.c:	move.l	cur_ring,a3
+	move.w	d0,RS_NDMG(a3)
+	eor.w	#KO_MAX*KO_SIZE,RS_KOFF(a3)	; (the new list: the ring's)
 	rts
 
 ; mo_object: record a6 into the target (tg_*): its strips of up to 32 pixels (4 tiles), each a baked image
@@ -5547,6 +5860,15 @@ ob_row:		ds.l	4
 ob_img:		ds.l	1
 ob_sort:	ds.b	12*64
 work_base:	ds.l	1
+ko_oldp:	ds.l	1		; (mo_match: the ring's list, this picture's)
+ko_newp:	ds.l	1
+ko_hash:	ds.w	256
+mo_kidx:	ds.w	KO_MAX
+mk_bits:	ds.l	MK_ROWS*2	; (the cells written this picture: touch)
+mk_from:	ds.l	65*2		; (mk_init)
+ko_used:	ds.b	KO_MAX
+mk_on:		ds.b	1
+ko_stamp:	ds.b	1
 flip_addr:	ds.l	1
 al_counter:	ds.l	1
 ring_index:	ds.w	1

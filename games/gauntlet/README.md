@@ -118,6 +118,22 @@ the grey ramps (palette 11) show there.  The game never reads its palette: none 
 (`sprite_test.py`, `render_test.py` five scenes); the horde scene 296.9k -> 285.6k cycles a picture (no redraws for
 colour cycling).  The text's pens are taken every picture as before (their blinking).
 
+2026-10-28: **unchanged objects stay in the ring.**  Every picture copied back from P all that the ring's objects had
+covered and drew every object again, though in play 77-84% of the objects are where they were two pictures before
+(the same ring).  Each ring now keeps its objects as drawn (`RS_DMG`, two lists swapped by `RS_KOFF`: the record's
+words, its palette's epoch, its ring pixel and line, its rows, and its rectangle).  `mo_match` (before anything is
+written into the ring) finds each record's equal entry through a hash (stamped per picture, not cleared); only the
+entries nothing matched are copied back (`mo_restore`).  Every write into the ring before the objects (strips,
+transparent characters, the copies back, queued tiles, the overlay's old rectangles: all through `touch`) and every
+object drawn marks its 16-pixel x 8-line cells (`mk_bits`, `mk_mark`; only when an entry matched, `mk_on`).  A
+matched record is left as it is when none of its cells is marked and every record left before it in this picture
+was below it in the ring's old order (`mo_draw`); else it is drawn.  The animated monsters (their codes change every
+tick) are drawn as before.  Exact (`sprite_test.py` 305 pictures, `render_test.py` five scenes).  `render_test.py`,
+Musashi CPU + Blitter a picture (mean): attract 202.2k -> 189.2k, seed 1 level 2 382.3k -> 358.8k, seed 12 level 5
+260.4k -> 264.7k, seed 14 level 9 (900 pictures) 286.9k -> 305.3k (its monsters animate in place: few stay, the
+matching and the cells ~20k), the attract mode's horde (`--seed 0 --first 2500 --frames 2650 --every 1`, 150
+pictures; its first picture differs before and after: drawn without the state before it) 678.6k -> 486.4k.
+
 ### The ghost horde
 
 2026-10-28, Hatari (the attract demo's densest horde, VBLs 2250-2750, the build with black shadows and the tile
