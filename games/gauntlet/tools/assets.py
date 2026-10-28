@@ -231,13 +231,23 @@ class Oracle:
     def picture(self, m):
         return self.picture_raw(m.vram(), m.palette(), m.xscroll)
 
-    def picture_raw(self, vram, palette, xscroll, pen_map=None, pen_pab=None):
+    def picture_raw(self, vram, palette, xscroll, pen_map=None, pen_pab=None, arc_view=False):
+        """arc_view: the attract mode's demo (render.s view_check, VIEW_ARC): the arcade's x -88 .. 231, drawn as the
+        picture of a scroll 88 pixels to the left with the alphanumerics (not scrolled) 88 pixels to the right"""
         vram = bytes(vram)
         ys = (vram[0x5F6E] << 8) | vram[0x5F6F]
+        shift = 88 if arc_view and panel_shown(vram) else 0
+        xscroll -= shift
         if panel_shown(vram):
             alpha = self.video.alpha
-            self.video.alpha = lambda v: (lambda p: (p[0], np.where(np.arange(p[1].shape[1]) < 232, p[1], False)))(
-                alpha(v))
+
+            def cut(p):
+                pix, mask = p[0], np.where(np.arange(p[1].shape[1]) < 232, p[1], False)
+                if shift:
+                    pix = np.concatenate((np.zeros_like(pix[:, :shift]), pix[:, :-shift]), 1)
+                    mask = np.concatenate((np.zeros_like(mask[:, :shift]), mask[:, :-shift]), 1)
+                return pix, mask
+            self.video.alpha = lambda v: cut(alpha(v))
             try:
                 raw = self.video.render_raw(vram, xscroll, ys)
             finally:

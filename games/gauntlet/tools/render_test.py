@@ -56,6 +56,15 @@ def scenario(seed, level=0, frames=3000, sound=True):
         yield f, m
 
 
+def arc_mode(m):
+    """the attract mode (the last floor command $01, a game $02; sound.s wide_set): the arcade's camera, the picture
+    its x -88 .. 231 (render.s view_check)"""
+    for f, c in reversed(m.sound_log):
+        if c in (0x01, 0x02):
+            return c == 0x01
+    return False
+
+
 def arc_map():
     """build/gauntlet/map.i (tools/patch.py): NAME -> the STE address"""
     out = {}
@@ -237,13 +246,15 @@ def main():
         vram = bytearray(m.vram())
         if args.nomo:
             vram[0x2000:0x4000] = bytes(0x2000)            # (every list: object 0, linked to itself, nothing drawn)
+        arc = arc_mode(m)
+        h.sim.mem.w8(h.sym["arc_view"], 0xFF if arc else 0)
         h.put_raw(vram, m.palette(), m.xscroll)
         used = h.draw()
         if checked:
             cyc.append(used)                                # (not the first: init_video, every tile and character)
         got = np.vstack((h.picture(), h.bar()))
         pm = h.pen_map()
-        want = np.vstack((oracle.picture_raw(vram, m.palette(), m.xscroll, pm, h.pen_pab()), oracle.bar(vram, m.palette(), pm, h.bar_pmap())))
+        want = np.vstack((oracle.picture_raw(vram, m.palette(), m.xscroll, pm, h.pen_pab(), arc), oracle.bar(vram, m.palette(), pm, h.bar_pmap())))
         checked += 1
         n = int((got != want).sum())
         if n:

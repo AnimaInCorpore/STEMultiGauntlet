@@ -198,6 +198,7 @@ init_video:
 	bsr	pf_mark_all
 	clr.w	view_dx
 	clr.w	view_col
+	clr.w	al_dx
 	bsr	al_reset
 	lea	pf_listed,a0
 	move.w	#4096/4-1,d0
@@ -342,17 +343,30 @@ al_reset:
 	rts
 
 ; view_check (after alpha_update): the picture shows the arcade's x 0-319 while the side panel is up (play: the camera
-; centres the players there), x 8-327 while it is down (the title, the tables: centred on the arcade's 336 pixels).
+; centres the players there), x 8-327 while it is down (the title, the tables: centred on the arcade's 336 pixels),
+; x -88 .. 231 in the attract mode's demo (arc_view: the arcade's own camera; the alphanumerics are not scrolled: their
+; characters keep their columns 0-39 and AIMG goes into the picture at the arcade's x 0, al_dx = 88 pixels in).
+VIEW_ARC = -88
 ; A change: the characters at their new places (al_reset, alpha_update), the scroll and the target again.
 view_check:
 	moveq	#0,d0
 	tst.w	panel_open
 	beq.s	.up
 	moveq	#8,d0
-.up:	cmp.w	view_dx,d0
+	bra.s	.v
+.up:	tst.b	arc_view		; (the attract mode's demo: the arcade's bounds and camera, sound.s wide_set:
+	beq.s	.v			;  its picture x 8-231 at the right, the 96 pixels more on its left)
+	moveq	#VIEW_ARC,d0
+.v:	cmp.w	view_dx,d0
 	beq.s	.x
 	move.w	d0,view_dx
-	lsr.w	#3,d0
+	clr.w	al_dx
+	tst.w	d0
+	bpl.s	.vc
+	neg.w	d0			; (the demo: the characters keep their columns, AIMG drawn at the arcade's x 0,
+	move.w	d0,al_dx		;  -VIEW_ARC pixels into the picture: al_r0)
+	moveq	#0,d0
+.vc:	lsr.w	#3,d0
 	move.w	d0,view_col
 	movem.l	d0-d7/a0-a6,-(sp)	; (the other kind of page: its palette at once, the pens it maps again dealt with
 	move.w	#SCENE_DUE,scene_due	;  before the characters are drawn again)
@@ -663,6 +677,8 @@ scroll_set:
 	lsl.w	#4,d0
 	add.w	d2,d0
 	move.w	d0,r0px			; R0 = 16 w0 + f: the ring pixel of the picture's x 0
+	add.w	al_dx,d0
+	move.w	d0,al_r0		; (AIMG's x 0: al_dx more, the attract mode's demo)
 	moveq	#3,d2
 	and.w	d1,d2
 	move.w	d2,bank
@@ -2671,13 +2687,13 @@ ovl_build:
 	move.w	#-1,OV_DHI(a2)
 	move.w	OV_C0(a2),d0
 	lsl.w	#3,d0
-	add.w	r0px,d0
+	add.w	al_r0,d0
 	lsr.w	#4,d0
 	move.w	d0,OV_RC0(a2)
 	move.w	OV_C1(a2),d0
 	lsl.w	#3,d0
 	subq.w	#1,d0
-	add.w	r0px,d0
+	add.w	al_r0,d0
 	lsr.w	#4,d0
 	move.w	d0,OV_RC1(a2)
 	lea	OV_SIZE(a2),a2
@@ -3091,14 +3107,14 @@ ovl_restore_old:
 	move.w	OV_RC0(a2),d0
 	move.w	OV_C0(a2),d4
 	lsl.w	#3,d4
-	add.w	r0px,d4
+	add.w	al_r0,d4
 	and.w	#15,d4
 	beq	.c0
 	addq.w	#1,d0
 .c0:	move.w	OV_RC1(a2),d1
 	move.w	OV_C1(a2),d4
 	lsl.w	#3,d4
-	add.w	r0px,d4
+	add.w	al_r0,d4
 	and.w	#15,d4
 	beq	.c1
 	subq.w	#1,d1
@@ -3309,7 +3325,7 @@ ovl_blit:
 	sub.w	d0,d1
 	move.w	d1,sb_w
 	move.w	d0,sb_spx
-	add.w	r0px,d0
+	add.w	al_r0,d0
 	move.w	d0,sb_dpx
 	moveq	#0,d0
 	move.w	d2,d0
@@ -3482,7 +3498,7 @@ al_trans_char:
 	add.w	d0,a0			; AIMG's byte
 	move.w	d6,d4
 	lsl.w	#3,d4
-	add.w	r0px,d4			; the ring pixel
+	add.w	al_r0,d4			; the ring pixel
 	moveq	#15,d5
 	and.w	d4,d5			; its bit (from the left)
 	lsr.w	#4,d4			; the ring word
@@ -5492,6 +5508,10 @@ ob_r0px:	ds.w	1
 panel_open:	ds.w	1
 view_dx:	ds.w	1		; (the arcade's x at the picture's x 0: 0, or 8 while the panel is down)
 view_col:	ds.w	1		; (view_dx / 8)
+al_dx:		ds.w	1		; (the picture's x of AIMG's x 0: 0, or -VIEW_ARC in the attract mode's demo)
+al_r0:		ds.w	1		; (the ring pixel of AIMG's x 0: r0px + al_dx)
+arc_view:	ds.b	1		; (the attract mode: the arcade's bounds and camera; sound.s wide_set)
+	even
 tr_touch:	ds.b	30		; (the character rows written this picture: touch)
 tr_on:		ds.b	1
 	even

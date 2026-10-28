@@ -56,14 +56,19 @@ class SoundModel:
         self.reset_bit = 1
         self.coin_byte = 0
         self.pending = []
+        self.on_floor = None
 
     def command(self, frame, v):
         v &= 0xFF
         self.commands.append((frame, v))
+        if v in (0x01, 0x02) and self.on_floor is not None:        # (the attract mode / a game: sound.s wide_set)
+            self.on_floor(v == 0x02)
         if v in self.REPLIES:
             self.pending.append(self.coin_byte if v == 0x03 else self.REPLIES[v])
 
     def reset(self, state):
+        if not state:
+            self.pending.clear()                # (held in reset: the replies not yet taken are gone; sound.s)
         if state and not self.reset_bit:
             self.pending.append(0xFF)
         self.reset_bit = state
@@ -79,6 +84,7 @@ class PortModel:
         self.frame = 0
         self.inputs = [0xFFFF] * 4
         self.sound = SoundModel()
+        self.sound.on_floor = self.wide_set
         self.pf_marks = set()               # the playfield quarter columns (32 bytes) the patched program's writers marked
         self.al_marked = False              # the alphanumerics' writers ran (patch.HOOKS, mem_clear)
         self.stopped = None
@@ -213,6 +219,13 @@ class PortModel:
             for i, w in enumerate(words):
                 self.mem[pc + 2 * i] = w >> 8
                 self.mem[pc + 2 * i + 1] = w & 0xFF
+
+    def wide_set(self, wide):
+        """the WIDE sites: the arcade's bytes (the attract mode) or the wide picture's (a game), as sound.s wide_set"""
+        from patch import wide_sites
+        for a, arc, new in wide_sites(ste=self.patched):
+            b = new if wide else arc
+            self.mem[a:a + len(b)] = np.frombuffer(b, np.uint8)
 
     def bank_of(self, a):
         """the bank a direct-switch access selects ($38040/50/60/70 and their mirrors), else None"""

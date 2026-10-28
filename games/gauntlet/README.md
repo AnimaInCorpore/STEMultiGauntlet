@@ -24,7 +24,22 @@ move) is the same window.  Monsters, generators and the magic keep their windows
 (seeds 3, 10, 12, 17 and two players walking apart): y 0-216, a lone player at (148, 108), centred.  The monsters
 act (move, shoot, attack) only inside a window of their own, 15 pixels left of the screen and 256 pixels wide
 ($904A82, written at $46E7A; tested at $80E8, $84A0 and in 2-pixel units at $89F2): widened by the same 88
-pixels, so monsters in the picture's right part no longer stand still.  `tools/logic_test.py` runs the original program
+pixels, so monsters in the picture's right part no longer stand still.  The attract mode keeps the arcade's own
+bounds and camera (2026-10-28): its demo replays recorded inputs, and in the wide picture's game it went elsewhere
+(the camera's right limit put a room of ghosts on screen at level 1's start; they took the cell left of the elf,
+$46D38, so the warrior and the wizard joined right of it, $46B0A, and their inputs ended 35 pixels short of the exit:
+only the elf left).  The floor commands mark the modes: on $01 (the attract mode, $41FB2) the runtime puts the
+arcade's bytes back into the WIDE sites, on $02 (a game, $41EA4) the wide picture's (`sound.s` `wide_set`, the table
+`build/gauntlet/wide.i` from `tools/patch.py`; `tools/stemodel.py` the same), and the picture shows the arcade's
+x -88 .. 231 then: its own view at the right, the 96 pixels more on the left (`render.s` `view_check`, `VIEW_ARC`;
+the alphanumerics keep their columns, AIMG at the arcade's x 0, `al_r0`).  The demo now plays as on the arcade (all
+three leave by the exit; the reference board's player positions equal the original program's).  `render_test.py`
+draws the reference that way while the last floor command was $01 (the whole attract cycle: 1,300 pictures, 0 differ).
+Found with it: a sound reply still waiting when the BIOS resets the sound CPU ($42F8 clears its ring before the
+release) came after the clear and answered every later command one late; whether it did depended on the boot's
+timing (the runtime's length moved it): the $07 ping went unanswered, the sound CPU was reset every frame and no
+command was heard.  The replies not yet taken are now dropped when the reset goes low (`snd_reset_d0`; the arcade's
+come ~80 us after their command, long before).  `tools/logic_test.py` runs the original program
 with the same patches (equal VBL for VBL, 8000 VBLs, seeds 3 and 12).  Transparent characters (the high-score and
 "score per coin" pages are made of them) are kept in each ring between pictures: a row is copied back from P and
 drawn again only when it changed, the ring moved, or something else wrote into its lines (`touch` notes the rows):

@@ -37,7 +37,17 @@ snd_command:
 	addq.b	#1,d1
 	and.b	#63,d1
 	move.b	d1,snd_qhead
-	cmp.b	#$03,d0
+	cmp.b	#$01,d0			; the floor: the attract mode ($41FB2) or a game ($41EA4): the arcade's bounds
+	bne.s	.nf1			;  and camera, or the wide picture's (wide_set)
+	moveq	#0,d1
+	bsr	wide_set
+	bra.s	.out
+.nf1:	cmp.b	#$02,d0
+	bne.s	.nf2
+	moveq	#1,d1
+	bsr	wide_set
+	bra.s	.out
+.nf2:	cmp.b	#$03,d0
 	bne.s	.n6
 	move.b	coin_byte,d0
 	bra.s	.reply
@@ -48,10 +58,43 @@ snd_command:
 .n7:	cmp.b	#$07,d0
 	bne.s	.out
 	moveq	#0,d0
-.reply:	bsr.s	snd_push
+.reply:	bsr	snd_push
 .out:	movem.l	(sp)+,d1/a0
 	move	(sp)+,sr
 	rts
+
+; wide_set: d1.b = 0: the WIDE sites get the arcade's bytes (the attract mode: its demo replays recorded inputs, the
+; arcade's bounds and camera keep them on their paths), else the wide picture's (a game); arc_view tells the renderer
+; (render.s view_check).  tools/patch.py write_wide, tools/stemodel.py the same.
+wide_set:
+	movem.l	d0/d2/a0-a2,-(sp)
+	tst.b	d1
+	seq	arc_view
+	lea	wide_sites,a0
+.site:	move.l	(a0)+,d0
+	beq.s	.done
+	move.l	d0,a1
+	move.w	(a0)+,d0		; its length
+	lea	(a0,d0.w),a2		; the wide picture's bytes
+	tst.b	d1
+	bne.s	.w
+	move.l	a0,a2			; the arcade's
+.w:	move.w	d0,d2
+	subq.w	#1,d2
+.c:	move.b	(a2)+,(a1)+
+	dbf	d2,.c
+	add.w	d0,a0
+	add.w	d0,a0
+	move.l	a0,d2			; (even)
+	addq.l	#1,d2
+	and.w	#-2,d2
+	move.l	d2,a0
+	bra.s	.site
+.done:	movem.l	(sp)+,d0/d2/a0-a2
+	rts
+
+	include	"wide.i"		; (tools/patch.py write_wide)
+	even
 
 ; the reset bit (Q7 of the latch at $803120-$80312F): d0 bit 0
 snd_reset_d0:
@@ -59,8 +102,13 @@ snd_reset_d0:
 	or	#$0700,sr
 	move.l	d0,-(sp)
 	and.b	#1,d0
-	beq.s	.low
-	tst.b	snd_reset_bit
+	bne.s	.high
+	move.b	snd_rhead,snd_rtail	; held in reset: the replies not yet taken are gone.  The arcade's come ~80 us
+	bra.s	.low			;  after their command, and the BIOS's reset ($42F8) clears its ring before the
+					;  release; here one waits for the frame's end or a VBL, and one that came after
+					;  the clear answered every later command one late (the boot's reset after a coin
+					;  query: $07 unanswered, the sound CPU reset again every frame, no commands heard)
+.high:	tst.b	snd_reset_bit
 	bne.s	.same
 	move.b	#$ff,d0
 	bsr.s	snd_push

@@ -21,7 +21,8 @@ against the original, and the STE's pictures are compared with a reference rende
   palette) at line 240.
 - **The game sees the wider screen too:** 24 small patches to the arcade program widen its own screen bounds by
   88 pixels. Players can walk across the whole picture, monsters stay alive there, generators and magic act on
-  everything shown, and the camera centres the players in 320 pixels.
+  everything shown, and the camera centres the players in 320 pixels. The attract mode keeps the arcade's own bounds
+  and camera, so its recorded demo plays as on the arcade (the 96 extra pixels shown on the left).
 - **Speed:** the game logic runs at the arcade's 60 frames a second. Pictures (Hatari, the attract demo,
   2026-10-28): 31-37 a second in light play, about 26 over the whole demo, 11-12 in a large ghost horde (about 5
   in its densest part, where the game's own logic also slows to a third). Objects' shadows are baked in as black
