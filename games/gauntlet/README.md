@@ -14,7 +14,14 @@ prepared streams per baked strip and shift (`MO_PREP`, each row only over its ow
 match (`tools/patch.py` WIDE, 24 places): it kept players inside x < 216 of the old 224-pixel maze area, released
 monsters beyond it, woke generators and aimed the magic only there, and centred the camera at x 104 with its right
 limit for a non-wrapping maze at the old area's edge; now the bounds are 88 pixels wider, the camera centres the
-players at x 152 and stops with the right wall at the picture's edge.  `tools/logic_test.py` runs the original program
+players at x 148 (a player's 24 pixels in the middle of the 320) and stops with the right wall at the picture's edge.
+2026-10-28: the players stay wholly inside the 320 x 240 picture.  The game's own window let a player (24 x 24) go
+8 pixels past every edge (on the arcade under the side panel and the screen's edge; on the STE half a tile under the
+status bar or off the top: measured, players pinned at y -8 and 224 when they spread apart).  The walking tests now
+subtract 8 pixels more (two 12-byte routines in the program's zeros at $7F00, `jsr` in place of the `sub.w`) and
+test 297 x 217 pixels: top left corner at x 0-296, y 0-216; the camera's box (every player inside, else it does not
+move) is the same window.  Monsters, generators and the magic keep their windows.  Measured on the reference board
+(seeds 3, 10, 12, 17 and two players walking apart): y 0-216, a lone player at (148, 108), centred.  `tools/logic_test.py` runs the original program
 with the same patches (equal VBL for VBL, 8000 VBLs, seeds 3 and 12).  Transparent characters (the high-score and
 "score per coin" pages are made of them) are kept in each ring between pictures: a row is copied back from P and
 drawn again only when it changed, the ring moved, or something else wrote into its lines (`touch` notes the rows):

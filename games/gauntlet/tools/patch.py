@@ -109,45 +109,87 @@ HOOK_SIZE = 16
 # not empty yet: wait for the next frame, then call $4802 again; else on at $40F8A)
 SCHEDULE = [(0x40C28, 0x60F8, 0x4E4E), (0x40F88, 0x66F6, 0x4E4D)]
 
-# The wide picture (STEMultiGauntlet: the maze over 320 pixels, the arcade's x 0-319, where the arcade showed 224 of
-# them, x 8-231, beside its side panel): the game's own idea of the screen widened by 88 pixels, so players walk,
+# The wide picture (STEMultiGauntlet: the maze over 320 x 240 pixels, the arcade's x 0-319, where the arcade showed
+# 224 of them, x 8-231, beside its side panel): the game's own idea of the screen widened by 88 pixels, so players walk,
 # monsters stay alive, generators and the magic act over what is shown, and the camera centres in it.
 # (address, original bytes, new bytes, what): positions are the arcade's x * 128 relative to (x scroll - 8) * 128
-# ($904A6C); 224 pixels = $7000, 312 = $9C00, 232 = $7400, 320 = $A000.  The y bounds stay (240 lines, as shown).
+# ($904A6C), y * 128 relative to (264 - y scroll) * 128 ($904A6E); 224 pixels = $7000, 312 = $9C00, 232 = $7400,
+# 320 = $A000.  A player (24 x 24) stays wholly inside the picture: its top left corner at x 0-296, y 0-216 (the
+# arcade's window let it go 8 pixels past every edge, under the side panel there, off the STE's picture here): the
+# walking tests subtract one more 8 pixels (PLAYER_X / PLAYER_Y, in the zeros at $7F00) and test 297 / 217 pixels;
+# the monsters, cells and magic keep their windows.  The camera's box (every player inside) is that window too, and
+# it centres a player's 24 pixels in the 320.  Window addresses are written as the arcade's: widen(ste=True) moves
+# them as tools/patch.py's relocation does ($90 -> $3F).
+PLAYER_X, PLAYER_Y = 0x7F00, 0x7F10
 WIDE = [
-    (0x092BA, "0c407000", "0c409c00", "a player moving right: within the screen (x < 224 -> 312)"),
-    (0x0941C, "0c407000", "0c409c00", "a player moving left: the same bound"),
-    (0x095A8, "0c407000", "0c409c00", "a player moving right (diagonal)"),
-    (0x095F2, "0c407000", "0c409c00", "a player moving left (diagonal)"),
-    (0x0970C, "0c407000", "0c409c00", "a player moving (the other test)"),
-    (0x09740, "0c407000", "0c409c00", "a player moving (not in the coverage)"),
+    (0x092BA, "0c407000", "0c409480", "a player moving right: within the screen (x < 224 -> 297, from 8 more)"),
+    (0x0941C, "0c407000", "0c409480", "a player moving left: the same bound"),
+    (0x095A8, "0c407000", "0c409480", "a player moving right (diagonal)"),
+    (0x095F2, "0c407000", "0c409480", "a player moving left (diagonal)"),
+    (0x0970C, "0c407000", "0c409480", "a player moving (the other test)"),
+    (0x09740, "0c407000", "0c409480", "a player moving (not in the coverage)"),
     (0x45C68, "0c457400", "0c45a000", "a monster released when off screen (x 232 -> 320)"),
     (0x46B66, "0c407000", "0c409c00", "a maze cell (generator, trap) active on screen"),
     (0x4DAE6, "0c407000", "0c409c00", "the magic: the cells on screen (not in the coverage)"),
     (0x4DC16, "0c407000", "0c409c00", "the magic (not in the coverage)"),
     (0x4DE00, "0c407000", "0c409c00", "the magic (not in the coverage)"),
     (0x4DFB6, "0c407000", "0c409c00", "the magic: the monsters on screen (not in the coverage)"),
-    (0x4DD72, "7068d1aefffc", "066e0098fffe", "the magic's centre: x scroll + 104 -> + 152 (addi.w to the long's low "
+    (0x4DD72, "7068d1aefffc", "066e0094fffe", "the magic's centre: x scroll + 104 -> + 148 (addi.w to the long's low "
                                                "word: no carry, the scroll < 512)"),
-    (0x45172, "04430098", "04430068", "the camera: the players' unwrap window, centre - 256 (152 -> 104 before it)"),
-    (0x45318, "064400e0", "06440138", "the camera: every player inside the new view (224 -> 312 wide)"),
-    (0x453E6, "064400e0", "06440138", "the camera (the other branch)"),
-    (0x45336, "048100000090", "048100000064", "the camera: that box's unwrap margin (512 - 224) / 2 -> (512 - 312) / 2"),
-    (0x4534E, "068100000090", "068100000064", "the camera: the same, the other side"),
-    (0x45414, "048100000090", "048100000064", "the camera (the other branch)"),
-    (0x4542C, "068100000090", "068100000064", "the camera (the other branch)"),
-    (0x4556C, "04410068", "04410098", "the camera: the scroll = the players' centre - 104 -> - 152 (centred in 320)"),
-    (0x4511A, "598170689280", "0441009c4e71", "the camera at a level's start: x - 4 - 104 -> x - 156 (the callee "
+    (0x45172, "04430098", "0443006c", "the camera: the players' unwrap window, centre - 256 (152 -> 108 before it)"),
+    (0x45318, "064400e0", "06440128", "the camera: every player inside the new view (224 -> 296 + 1 wide)"),
+    (0x453E6, "064400e0", "06440128", "the camera (the other branch)"),
+    (0x45336, "048100000090", "04810000006c", "the camera: that box's unwrap margin (512 - 224) / 2 -> (512 - 296) / 2"),
+    (0x4534E, "068100000090", "06810000006c", "the camera: the same, the other side"),
+    (0x45414, "048100000090", "04810000006c", "the camera (the other branch)"),
+    (0x4542C, "068100000090", "06810000006c", "the camera (the other branch)"),
+    (0x4556C, "04410068", "04410094", "the camera: the scroll = the players' centre - 104 -> - 148 (a player's "
+                                       "24 pixels centred in 320)"),
+    (0x4511A, "598170689280", "044100984e71", "the camera at a level's start: x - 4 - 104 -> x - 152 (the callee "
                                                "reads the low word only)"),
     (0x454F2, "0c410124", "0c4100cc", "the camera: the scroll's right limit (a maze that does not wrap) 292 -> 204: "
                                        "its right wall at the picture's right edge, as at the arcade's x 231"),
     (0x454F8, "323c0124", "323c00cc", "the camera: the same limit"),
+    (0x45314, "5143", "4e71", "the camera's box: from the scroll, not 8 pixels left of it"),
+    (0x453E2, "5143", "4e71", "the camera's box (the other branch)"),
+    (0x4536E, "5143", "4e71", "the camera's box: y from the scroll, not 8 lines above it"),
+    (0x45372, "064400e8", "064400d8", "the camera's box: 232 -> 216 + 1 lines"),
+    (0x45396, "04810000008c", "048100000094", "the camera: that box's unwrap margin (512 - 232) / 2 -> (512 - 216) / 2"),
+    (0x453AE, "06810000008c", "068100000094", "the camera: the same, the other side"),
+    (0x4544C, "5143", "4e71", "the camera's box, y (the other branch)"),
+    (0x45450, "064400e8", "064400d8", "the camera's box, y (the other branch)"),
+    (0x45478, "04810000008c", "048100000094", "the camera (the other branch)"),
+    (0x45490, "06810000008c", "068100000094", "the camera (the other branch)"),
+    (PLAYER_X, "00" * 12, "907900904a6c044004004e75", "sub.w $904a6c.l,d0; subi.w #$400,d0; rts: a player's x "
+                                                      "window from the picture's left edge"),
+    (PLAYER_Y, "00" * 12, "907900904a6e044004004e75", "the same for y, from the picture's top line"),
+    (0x092B4, "907900904a6c", "4eb900007f00", "a player moving: x from the picture's left edge (PLAYER_X)"),
+    (0x09416, "907900904a6c", "4eb900007f00", "a player moving: x from the picture's left edge (PLAYER_X)"),
+    (0x095A2, "907900904a6c", "4eb900007f00", "a player moving: x from the picture's left edge (PLAYER_X)"),
+    (0x095EC, "907900904a6c", "4eb900007f00", "a player moving: x from the picture's left edge (PLAYER_X)"),
+    (0x09706, "907900904a6c", "4eb900007f00", "a player moving: x from the picture's left edge (PLAYER_X)"),
+    (0x0973A, "907900904a6c", "4eb900007f00", "a player moving: x from the picture's left edge (PLAYER_X)"),
+    (0x09312, "907900904a6e", "4eb900007f10", "a player moving: y from the picture's top line (PLAYER_Y)"),
+    (0x09318, "0c407400", "0c406c80", "the same: within 217 lines (232 before)"),
+    (0x0935C, "907900904a6e", "4eb900007f10", "a player moving: y from the picture's top line (PLAYER_Y)"),
+    (0x09362, "0c407400", "0c406c80", "the same: within 217 lines (232 before)"),
+    (0x09472, "907900904a6e", "4eb900007f10", "a player moving: y from the picture's top line (PLAYER_Y)"),
+    (0x09478, "0c407400", "0c406c80", "the same: within 217 lines (232 before)"),
+    (0x094A6, "907900904a6e", "4eb900007f10", "a player moving: y from the picture's top line (PLAYER_Y)"),
+    (0x094AC, "0c407400", "0c406c80", "the same: within 217 lines (232 before)"),
+    (0x09548, "907900904a6e", "4eb900007f10", "a player moving: y from the picture's top line (PLAYER_Y)"),
+    (0x0954E, "0c407400", "0c406c80", "the same: within 217 lines (232 before)"),
+    (0x096A6, "907900904a6e", "4eb900007f10", "a player moving: y from the picture's top line (PLAYER_Y)"),
+    (0x096AC, "0c407400", "0c406c80", "the same: within 217 lines (232 before)"),
 ]
 
 
-def widen(rom):
-    """the WIDE patches applied to a program image (bytearray, the arcade's addresses)"""
+def widen(rom, ste=False):
+    """the WIDE patches applied to a program image (bytearray, the arcade's addresses; ste: its window addresses
+    already moved to the STE's)"""
     for a, old, new, _ in WIDE:
+        if ste:
+            old, new = (h.replace("00904a6", "003f4a6") for h in (old, new))
         old, new = bytes.fromhex(old), bytes.fromhex(new)
         assert len(old) == len(new) and bytes(rom[a:a + len(old)]) == old, "WIDE %06X: not %s" % (a, old.hex())
         rom[a:a + len(new)] = new
@@ -304,7 +346,7 @@ def build(report=False):
         op = 0x4EF9 if name.startswith("slap") else 0x4EB9          # (the slapstic's routines: replaced whole)
         words = [op, (RT_STUBS + 6 * k) >> 16, (RT_STUBS + 6 * k) & 0xFFFF] + [0x4E71] * ((n - 6) // 2)
         rom[pc:pc + n] = b"".join(struct.pack(">H", w) for w in words)
-    widen(rom)                                         # (the wide picture's game: WIDE)
+    widen(rom, ste=True)                               # (the wide picture's game: WIDE)
     out = build_dir("gauntlet")
     hooks = []
     for k, (pc, n) in enumerate(HOOKS):
