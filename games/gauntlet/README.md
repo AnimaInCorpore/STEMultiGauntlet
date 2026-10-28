@@ -271,7 +271,9 @@ over the playfield and the bar is empty.
   out).  When the panel goes up or down the palette of the other kind is chosen in that picture (`view_check`).
 * **Palette (the default since 2026-10-26)**: `docs/palette_db15.json`, DawnBringer 16 on the STE grid without its
   brown (15 colours, colour 0 the near-black $112) plus colour 15 kept free (the title logo's band; a colour-cycled
-  glow later).  Chosen by eye over the fitted palettes above: more shades in the sprites, every player and monster
+  glow later).  Since 2026-10-28 its cyan (the rarest colour in play) is a neutral dark grey #333344: the floor's
+  dark greys had only #111122 and #554455, a checker of the two between them (twice the arcade's contrast, a rough,
+  dark floor); now its middle greys take the new grey.  Chosen by eye over the fitted palettes above: more shades in the sprites, every player and monster
   recognisable.  `tools/assets.py` gives every scene this palette (the scene machinery stays, its choice no longer
   matters), mapped in Oklab with the lightness scaled by 0.5; the status bar keeps its own palette.
   `GAUNTLET_PALETTE=scenes python games/gauntlet/tools/build.py`: the fitted scene palettes again.

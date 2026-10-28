@@ -1,5 +1,5 @@
 {
- "name": "Gauntlet target palette: DawnBringer 16 minus its brown, on the STE grid, plus a glow slot",
+ "name": "Gauntlet target palette: DawnBringer 16 minus its brown, its cyan as a dark grey, on the STE grid, plus a glow slot",
  "status": "chosen 2026-10-26 (user); the port's default since 2026-10-26 (tools/assets.py: every scene palette; GAUNTLET_PALETTE=scenes: the fitted ones)",
  "origin": "DawnBringer 16 (lospec.com/palette-list/dawnbringer-16) snapped to the STE's 4 bits per channel, #854c30 (brown) left out. Chosen by eye over the fitted palettes (docs/scenes.json, docs/palette.json) and over palettes from jsoklabquantizer's optimized mode (main ddb38df: free OKLab on the STE grid, per-sprite minimax, key colours, shade weight, anchor palette), on MAME frames of all four players, all seven monsters with their generators, the item legend and the demo maze. Dropping DB16's red instead cost least by the optimizer's score, but turned the demons and the Warrior orange-brown; dropping the grey turned the floor purple-blue; letting the colours move (anchor radius 5 or 10) turned the floor brown or green.",
  "mapping": "nearest colour in OKLab with lightness scaled by 0.5 (hue shifts cost more than shading shifts), as jsoklabquantizer maps",
@@ -16,15 +16,16 @@
   "#889999",
   "#66aa33",
   "#ccaa99",
-  "#66bbcc",
+  "#333344",
   "#ddcc66",
   "#ddeedd"
  ],
- "ste": ["$112", "$423", "$336", "$545", "$362", "$C44", "$776", "$57C", "$C73", "$899", "$6A3", "$CA9", "$6BC", "$DC6", "$DED"],
+ "ste": ["$112", "$423", "$336", "$545", "$362", "$C44", "$776", "$57C", "$C73", "$899", "$6A3", "$CA9", "$334", "$DC6", "$DED"],
  "glow_slot": 15,
  "notes": [
   "Colour 0 is DB16's near-black $112, not $000: the border and the picture's black become it.",
   "Colour 15 is left free for a colour-cycled glow (the playfield's flickering and pulsing pens, docs/scenes.json effect_pens); render.s leaves colour cycling out today.",
-  "The comparison images are not in git (build/palette_test/, made in the session that chose it)."
+  "The comparison images are not in git (build/palette_test/, made in the session that chose it).",
+  "2026-10-28 (user): DB16's cyan #6dc2ca (#66bbcc, the rarest colour in play: 140 pixels in 14 sampled frames) replaced by a neutral dark grey #333344 (colour 12): the floor's seven dark greys (#1b1b1b-#434354) had only #111122 and #554455, a checker of the two for the middle ones: twice the arcade's contrast, a rough, dark floor."
  ]
 }
