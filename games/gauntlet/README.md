@@ -23,12 +23,27 @@ those pages 4.1M -> 72-104k cycles a picture, Hatari 1-2 -> 49-50 pictures a sec
 23-50, demo play 13-45), 20 with a message box; a ghost horde now on screen (it was under
 the panel) costs ~800k cycles a picture (was ~470k).
 
+Hatari, 2026-10-28 (commit aaf0e7e: MO_PREP, DB15, checker dither; pinned build, 8 MHz STE, cycle-exact, fast-forward;
+attract mode from boot, the program's `vbl_count` / `frames_done` / `pictures` read every 250 VBLs by debugger
+breakpoints, 8,500 VBLs, two runs equal), pictures / logic ticks a second (the arcade's logic: 60):
+
+| Scene | Pictures/s | Ticks/s |
+|---|---:|---:|
+| demo play, light (3 players, 1,000 VBLs) | 32.3 | 57.2 |
+| demo play after the horde (1,250 VBLs) | 36.8 | 58.9 |
+| demo play, ghost horde (1,250 VBLs) | 9.5 | 30.8 |
+| the horde's worst 500 VBLs | 4.3 | 17.4 |
+| demo play, all (3,500 VBLs) | 25.8 | 48.4 |
+| legend / monster pages (4,500 VBLs) | 34.1 | 51.5 |
+
+In the horde the renderer starves the logic (STARVE): the game itself runs at a third of the arcade's speed there.
+
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 
 STE port of MAME set `gauntlet` (rev 14; driver `atari/gauntlet.cpp`).  Unlike the other ports nothing is translated:
 the arcade's main CPU is a 68010, and its own program runs on the STE's 68000, patched in place.  The game's logic
-runs at the arcade's speed (60 frames a second: six for every five VBLs), the picture 16 times a second in Hatari in
-the attract mode, 33 in light play (busy scenes cost up to twice as much); 320 of the 336 pixels and all 240 lines, the side panel as a status bar below, 16 colours; music, effects and
+runs at the arcade's speed (60 frames a second: six for every five VBLs), the picture 26 times a second in Hatari in
+the attract mode's demo play, 32-37 in light play, 4-10 in a ghost horde (2026-10-28, table above); 320 of the 336 pixels and all 240 lines, the side panel as a status bar below, 16 colours; music, effects and
 speech.  Needs a 4 MB STE and the whole machine: the program takes TOS's memory, so **Esc resets** the STE (there is
 no return to the desktop and no CRASH.TXT; a crash turns the screen red and keeps its record at $3C1000).
 
