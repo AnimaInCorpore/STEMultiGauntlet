@@ -60,6 +60,7 @@ def main():
     ap.add_argument("--save", default=None)
     ap.add_argument("-D", dest="defines", action="append", default=[])
     args = ap.parse_args()
+    render_test.reference_mode(args.defines)
     prg = build_dir("gauntlet") / "render_test.prg" if args.nobuild else render_test.build_harness(args.defines)
     h = render_test.Harness(prg)
     oracle = assets.Oracle()

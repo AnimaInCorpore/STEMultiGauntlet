@@ -69,6 +69,12 @@ RING0 = $200000
 RING1 = RING0+STRIDE*RING_LINES
 PFB = $2C0800				; P: 512 lines x 256 bytes
 PFS = $2E0800				; P': the shadow colours
+	ifnd MO_BLACKSH			; an object's pen 1 (its shadow, its outline) baked as the scene's black, opaque: no
+MO_BLACKSH = 1				; shadow passes (-D MO_BLACKSH=0: the arcade's shadows, P' through pen 1)
+	endc
+	if MO_BLACKSH
+NOSHADOW = 1
+	endc
 AIMG = $300800				; the alphanumerics: 240 lines x 160 bytes
 PF_LISTS = $30A000			; 8 x 4096 words: the positions of the tiles of each playfield palette
 LUTS = $31A000				; 32 x 2 KB: per colour set, a byte of two pixels -> their plane bits (and mirrored)
@@ -968,6 +974,16 @@ pen_remap:
 	move.w	(a3,d3.w),d3
 	cmp.w	#$100,d0
 	blo.s	.txt
+	if MO_BLACKSH			; (an object palette's pen 1: black, RGB 0)
+	cmp.w	#$200,d0
+	bhs.s	.nk
+	moveq	#15,d7
+	and.w	d0,d7
+	subq.w	#1,d7
+	bne.s	.nk
+	moveq	#0,d3
+.nk:
+	endc
 	move.l	scene_pab_p,a3
 	move.b	(a3,d3.w),d5
 	tst.b	band_mode		; (a band pen on the title: the band's colour)
@@ -4000,7 +4016,12 @@ mo_bake:
 	lea	bitrev,a0
 	move.b	(a0,d2.w),d2
 	move.b	(a0,d3.w),d3
-.nm:	moveq	#24,d1
+.nm:
+	if MO_BLACKSH			; (the shadow pixels opaque: their colour pen 1's, black)
+	or.b	d3,d2
+	moveq	#0,d3
+	endc
+	moveq	#24,d1
 	move.w	d4,-(sp)
 	lsl.w	#3,d4
 	sub.w	d4,d1
@@ -4468,7 +4489,7 @@ mo_prep_draw:
 	dbf	d5,.l3
 	bra	.g
 .od:	; the shadow rows: P' at row 0's column, when neither its columns nor its lines wrap inside the image
-	ifd NOSHADOW				; (measurement only: the objects' shadows left out)
+	ifd NOSHADOW				; (no shadow rows: MO_BLACKSH, or -D NOSHADOW=1 to measure them left out)
 	bra	.done
 	endc
 	cmp.w	#-1,(a1)

@@ -38,6 +38,7 @@ pixels).  Tile graphics: 8192 tiles of gfx_8x8x4_planar (planes at 3/4, 2/4, 1/4
 inverted (ROMREGION_INVERT); codes modulo 8192.
 Picture (back to front): the playfield; the motion object merge: a pixel of pen 1 (pixel & $F == 1) flips the
 playfield pen's bit 7 ($280-$2FF -> $200-$27F: the shadows), any other drawn pixel replaces it; the alphanumerics.
+Video.black_shadow (the port's MO_BLACKSH, not the board): pen 1 drawn as an ordinary object pixel instead.
 Palette: 1024 pens IRGB_4444 ($910000 + pen * 2; $000-$0FF alpha, $100-$1FF MO, $200-$2FF playfield, $300-$3FF
 unused): i = I * $11, r = i * (R * $11) >> 8 (MAME's standard_irgb_decoder).
 """
@@ -66,6 +67,8 @@ def words(b):
 
 
 class Video:
+    black_shadow = False
+
     def __init__(self):
         tiles = bytes(x ^ 0xFF for x in b"".join(load(n) for n in TILE_ROMS))          # ROMREGION_INVERT
         q = len(tiles) * 8 // 4
@@ -172,7 +175,7 @@ class Video:
         ph = ((rows[:, None] + cols[None, :]) & 1).astype(np.int8)
         mph = np.zeros((H, W), np.int8)
         mo = self.motion_objects(vram, xscroll, yscroll, 0, H - 1, mph)
-        put = (mo != NO_MO) & ((mo & 0x0F) != 1)
+        put = (mo != NO_MO) & (((mo & 0x0F) != 1) | self.black_shadow)
         ph[put] = mph[put]
         return ph
 
@@ -187,7 +190,7 @@ class Video:
         bm = pf[np.ix_(rows, cols)]
         mo = self.motion_objects(vram, xscroll, yscroll, y0, y1)[y0:]
         drawn = mo != NO_MO
-        shadow = drawn & ((mo & 0x0F) == 1)
+        shadow = drawn & ((mo & 0x0F) == 1) & (not self.black_shadow)
         bm[shadow] ^= 0x80
         put = drawn & ~shadow
         bm[put] = mo[put]

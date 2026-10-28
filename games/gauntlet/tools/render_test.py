@@ -201,6 +201,13 @@ def ring_pixels(data, lines, words, stride=STRIDE):
     return pix.reshape(lines, words * 16).astype(np.uint8)
 
 
+def reference_mode(defines):
+    """the reference picture as the build draws it: pen 1 opaque (render.s MO_BLACKSH, the default) unless
+    -D MO_BLACKSH=0"""
+    import video
+    video.Video.black_shadow = not any(d.replace(" ", "") == "MO_BLACKSH=0" for d in defines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
@@ -214,6 +221,7 @@ def main():
     ap.add_argument("--nomo", action="store_true", help="the motion objects left out (both pictures)")
     ap.add_argument("-D", dest="defines", action="append", default=[])
     args = ap.parse_args()
+    reference_mode(args.defines)
     import assets
     prg = build_dir("gauntlet") / "render_test.prg" if args.nobuild else build_harness(args.defines)
     h = Harness(prg, args.profile)

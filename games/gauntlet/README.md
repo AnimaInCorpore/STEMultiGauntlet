@@ -45,6 +45,15 @@ objects' shadow rows not drawn, pen 1 transparent) over the same game ticks: the
 (ticks 30.8 -> 34.5), 939k -> 779k a picture (`mo_prep_draw` 155k -> 76k), light play unchanged (32.3 -> 32.7);
 the logic and the per-object work stay.
 
+2026-10-28: **black shadows** (`MO_BLACKSH`, the default; `-D MO_BLACKSH=0`: the arcade's shadows).  An object's pen
+1 (the board darkens the playfield under it: the objects' shadows and dark outlines) is baked into the object as an
+opaque pixel of the scene's black: `pen_remap` gives every object palette's pen 1 RGB 0, `mo_bake` adds the shadow
+mask to the opaque one, and no shadow rows are prepared or drawn.  The reference (`tools/video.py`
+`Video.black_shadow`, set by `render_test.py` / `sprite_test.py` from the build's defines) draws pen 1 the same way;
+both tests exact in both modes.  Hatari over the same game ticks: as fast as no shadows, the horde 9.5 -> 12.4
+pictures/s (ticks 30.8 -> 34.4), light play 32.3 -> 32.7, demo play 25.8 -> 26.8 (`docs/black_shadow_horde.png`:
+left the shadows, right black).  P' is still kept up to date though no object reads it any more.
+
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 
 STE port of MAME set `gauntlet` (rev 14; driver `atari/gauntlet.cpp`).  Unlike the other ports nothing is translated:
@@ -272,7 +281,7 @@ variables and stack are in the spare video RAM at $904000), the EEPROM $802000, 
 
 Video (`tools/video.py`, gauntlet.cpp + atarimo.cpp): the playfield 64 x 64 tiles of 8x8 (512 x 512, scrolled), the
 motion objects (linked lists through the SLIP table, 8-line bands; pen 1 is a shadow: it flips the playfield
-colour's bit $80), the alphanumerics 64 x 31 on top; 1024 pens IRGB_4444; 336 x 240 visible at 59.92 Hz.
+colour's bit $80; the port draws it black by default, `MO_BLACKSH`), the alphanumerics 64 x 31 on top; 1024 pens IRGB_4444; 336 x 240 visible at 59.92 Hz.
 
 ### Checked against MAME (`tools/machine.py`, `ref/mame_cmp_gauntlet.py`, `ref/trace_cmp.py`)
 
