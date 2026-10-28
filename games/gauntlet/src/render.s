@@ -1102,6 +1102,8 @@ pen_remap:
 	endc
 	move.l	scene_pab_p,a3
 	move.b	(a3,d3.w),d5
+	tst.b	band_mode		; (the title, the tables: no pulse, PULSE_COL is the band's; the pulse's pens
+	bne.s	.npu			; are the heroes' skin there, mapped as any pen: band_remap)
 	cmp.w	#PULSE_PEN,d0		; (the red pulse: colour PULSE_COL, set every VBL)
 	blo.s	.npu
 	cmp.w	#PULSE_PEN+PULSE_N,d0
@@ -1401,6 +1403,11 @@ band_remap:
 	addq.w	#1,d0
 	cmp.w	#$190,d0
 	blo.s	.p
+	move.w	#PULSE_PEN,d0		; (the pulse's pens: PULSE_COL in play only)
+.q:	bsr	pen_remap
+	addq.w	#1,d0
+	cmp.w	#PULSE_PEN+PULSE_N,d0
+	blo.s	.q
 	movem.l	(sp)+,d0-d7/a0-a3
 	rts
 
