@@ -130,6 +130,11 @@ WIDE = [
     (0x09740, "0c407000", "0c409480", "a player moving (not in the coverage)"),
     (0x45C68, "0c457400", "0c45a000", "a monster released when off screen (x 232 -> 320)"),
     (0x46B66, "0c407000", "0c409c00", "a maze cell (generator, trap) active on screen"),
+    # the monsters' own window: origin (x scroll - 23) * 128 ($904A82, written at $46E7A), 256 pixels wide; the
+    # monsters outside it do not move or attack
+    (0x080E8, "0c407fff", "0c40abff", "a monster acts within the monsters' window (256 -> 344 pixels)"),
+    (0x084A0, "0c407fff", "0c40abff", "a monster acts within the monsters' window (the other loop)"),
+    (0x089F2, "0c040079", "0c0400a5", "the same window in 2-pixel units, high bytes ($87FA, $88EA): x/2 < 121 -> 165"),
     (0x4DAE6, "0c407000", "0c409c00", "the magic: the cells on screen (not in the coverage)"),
     (0x4DC16, "0c407000", "0c409c00", "the magic (not in the coverage)"),
     (0x4DE00, "0c407000", "0c409c00", "the magic (not in the coverage)"),

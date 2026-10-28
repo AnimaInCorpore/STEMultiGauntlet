@@ -21,7 +21,10 @@ status bar or off the top: measured, players pinned at y -8 and 224 when they sp
 subtract 8 pixels more (two 12-byte routines in the program's zeros at $7F00, `jsr` in place of the `sub.w`) and
 test 297 x 217 pixels: top left corner at x 0-296, y 0-216; the camera's box (every player inside, else it does not
 move) is the same window.  Monsters, generators and the magic keep their windows.  Measured on the reference board
-(seeds 3, 10, 12, 17 and two players walking apart): y 0-216, a lone player at (148, 108), centred.  `tools/logic_test.py` runs the original program
+(seeds 3, 10, 12, 17 and two players walking apart): y 0-216, a lone player at (148, 108), centred.  The monsters
+act (move, shoot, attack) only inside a window of their own, 15 pixels left of the screen and 256 pixels wide
+($904A82, written at $46E7A; tested at $80E8, $84A0 and in 2-pixel units at $89F2): widened by the same 88
+pixels, so monsters in the picture's right part no longer stand still.  `tools/logic_test.py` runs the original program
 with the same patches (equal VBL for VBL, 8000 VBLs, seeds 3 and 12).  Transparent characters (the high-score and
 "score per coin" pages are made of them) are kept in each ring between pictures: a row is copied back from P and
 drawn again only when it changed, the ring moved, or something else wrote into its lines (`touch` notes the rows):
