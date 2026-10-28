@@ -322,7 +322,10 @@ The 6502's driver modelled at the level of its voices: 12 logical channels (POKE
 sound starts one voice per channel of its chain (the driver's tables $5F36 / $63E2, channel $6166, priority $5FBE), a
 voice of equal priority replaces the old one, lower ones keep running underneath.  $01 / $02 set the floor (the
 attract mode sends $01: only the title music $42 and priority-63 sounds there); speech has an 8-deep queue by
-priority and lowers the YM / POKEY gains while it speaks; $DD-$E0 the mixer, $43 / $48 fades.
+priority and lowers the YM / POKEY gains while it speaks (the STE also cuts the YM by 6 volume steps and the POKEY's
+voices by 4 while a phrase speaks: its DMA speech is at full scale, yet the YM2149 played 18.4 dB (POKEY 11.7 dB)
+louder against it than MAME's mix; the "welcome" was buried under the effect $09 sent with it, 13% of the mix's
+power speech, now 68%, the arcade's 86%); $DD-$E0 the mixer, $43 / $48 fades.
 
 * **Recordings**: each sound alone on the reference board at 50 Hz (the music keeps its tempo at the STE's speed).
   POKEY channels become tone or noise; YM2151 loudness from the carriers' envelopes, the timbre from rendering all

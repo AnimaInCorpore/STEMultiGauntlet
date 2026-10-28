@@ -28,6 +28,8 @@ SO_FADE_END = 15
 SO_NCH = 12
 SO_DEC_LEAD = 128			; tools/sound.py DEC_LEAD, DEC_TICK
 SO_DEC_TICK = 64
+SO_SPEECH_YM_CUT = -6			; tools/sound.py SPEECH_YM_CUT, SPEECH_POKEY_CUT
+SO_SPEECH_POKEY_CUT = -4
 ; a voice slot
 V_PTR = 0				; the stream's next byte
 V_LOOP = 4				; the loop's address (0: none)
@@ -635,7 +637,15 @@ so_channels:
 	lsr.b	#3,d0
 	and.w	#3,d0
 	move.b	so_pokey_off-so_ym_off(a0,d0.w),d5
-	lea	so_vals,a4
+	tst.w	so_duck			; the STE's own cut while a phrase speaks (tools/sound.py SPEECH_YM_CUT,
+	beq.s	.cut			; SPEECH_POKEY_CUT): the YM2149 against the DMA's speech
+	cmp.b	#$80,d4
+	beq.s	.cy
+	subq.b	#-SO_SPEECH_YM_CUT,d4
+.cy:	cmp.b	#$80,d5
+	beq.s	.cut
+	subq.b	#-SO_SPEECH_POKEY_CUT,d5
+.cut:	lea	so_vals,a4
 	lea	so_cand,a0
 	lea	so_assigned,a3
 	moveq	#0,d7			; the candidates

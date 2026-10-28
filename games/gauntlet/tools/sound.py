@@ -926,6 +926,12 @@ K_NONE, K_STOPALL, K_SOUND, K_KILL, K_FADE, K_FADEPRI, K_SPEECH, K_FLOOR, K_MIXE
 YM_OFF = [None, -6, -4, -2, -2, -1, 0, 0]       # the mixer's YM2151 gain (0-7) as a YM volume offset (None: mute)
 POKEY_OFF = [None, -3, -1, 0]                    # the POKEY's (0-3)
 MIX_BOOT = 0xFF                                  # the mixer after the driver's start ($24 | $25)
+# the STE's own cut while a phrase speaks (the duck ticks), in YM volume steps (~3 dB each, YM_LEVEL): the DMA's speech
+# is at full scale, yet the YM2149 played the effects and tunes 18.4 dB (15.9-21.5) and the POKEY's 11.7 dB louder
+# against it than MAME's mix of the arcade does (sound_test.py's pieces and the phrase $65, MAME 0.289 against Hatari,
+# 2026-10-28): the "welcome" was buried under the effect $09 sent with it
+SPEECH_YM_CUT = -6
+SPEECH_POKEY_CUT = -4
 DEC_LEAD = 128                                   # ADPCM bytes decoded when a phrase starts (256 samples: 41 ms ahead)
 DEC_TICK = 64                                    # ... and each tick after (128 samples; the DMA plays 125.2)
 
@@ -1161,7 +1167,11 @@ class Player:
 
     def gains(self):
         mx = self.duck_mix if self.duck else self.mixer
-        return YM_OFF[mx & 7], POKEY_OFF[(mx >> 3) & 3]
+        ym, pk = YM_OFF[mx & 7], POKEY_OFF[(mx >> 3) & 3]
+        if self.duck:
+            ym = None if ym is None else ym + SPEECH_YM_CUT
+            pk = None if pk is None else pk + SPEECH_POKEY_CUT
+        return ym, pk
 
     def mix(self, chans):
         ym, pk = self.gains()
