@@ -1,9 +1,9 @@
 # Gauntlet (Atari Games, 1985) for the Atari STE
 
-STEGauntlet: the arcade's Gauntlet on the STE, aimed at fast play and, later, networked play over the MIDI ports
+STEMultiGauntlet (named STEGauntlet until 2026-10-28): the arcade's Gauntlet on the STE, aimed at fast play and, later, networked play over the MIDI ports
 (MIDI-Maze style: every player on a screen of their own).  Imported from STEArcade (commit 0ba04dc) on 2026-10-26.
 
-2026-10-26 (STEGauntlet): the picture uses the whole screen.  The borders are open at the top and the bottom
+2026-10-26 (STEMultiGauntlet): the picture uses the whole screen.  The borders are open at the top and the bottom
 (stefastbobs2's screen, 276 lines): the maze over the full width, the arcade's x 0-319, in lines 0-239, hardware
 scrolled as before; the side panel is gone from the picture and its cells (scores, health, inventory, names, level)
 are laid out again in a status bar in lines 240-275 (`tools/bar.py`), a static image of its own that the Timer B
@@ -68,6 +68,39 @@ plane bytes, `movep`), in 2,048 direct-mapped slots (key: code, palette, flip x;
 374.2k / 7.14M -> 359.7k / 5.41M, seed 14 level 9 291.7k / 2.76M -> 288.9k / 1.83M.  Hatari, the attract demo's
 longest pictures: the camera cuts 20 -> 13 and 25 -> 18 VBLs; the dense horde's 12-20 VBL pictures stay (the game's
 logic, ~129k cycles a tick there, and the objects).
+
+### The ghost horde
+
+2026-10-28, Hatari (the attract demo's densest horde, VBLs 2250-2750, the build with black shadows and the tile
+cache; the profiler's CPU cycles include the Blitter's stalls; every picture's VBL and tick logged by a debugger
+breakpoint on `pictures`): 70 pictures in 500 VBLs (7 a second, a new one every 9-13 VBLs, 3-5 game ticks apart:
+the stutter), 1,145k cycles a picture:
+
+| Part | a picture | |
+|---|---:|---|
+| the game's program | ~330k | 101k a tick, 3.3 ticks a picture |
+| drawing the objects (`mo_prep_draw`, `mo_strip_draw`) | 162k | ~30 objects |
+| the restores (`blit_go_split`: the Blitter's HOG pieces) | 86k | 285 pieces, ~69k of it Blitter time |
+| the objects' list and records (`mo_snapshot`, `mo_place`, `mo_record`, `touch`, `mo_image`, `mo_object`) | 160k | |
+| waiting for the flip (`render_frame` `.wait` on `frame_ready`) | 66k | the other ring still shown |
+| bakes and prepared streams (`mo_bake`, `mo_prep`) | 36k | |
+| interrupts and input (`timer_b`, `bd_ta_chain`, `jagpad_poll`) | 51k | `jagpad_poll` alone 16k |
+
+The game's time is mostly its monster loop at $808E-$8412 (for each entry of the motion object list: its type, on
+screen, then the four direction probes $8F38 / $9006 / $90D2 / $9192 against the maze, then its video RAM entry
+written): ~58% of the 101k a tick.  The arcade's 68010 at 7.16 MHz has ~119k cycles a tick, so the board itself
+slows down in such hordes.
+
+`STARVE` (the VBLs without a picture before the game waits for the renderer; 4) does not help: 2 and 1 give
+smaller steps (at most 4 and 3 ticks a picture against 6) but the game at 32% of its speed against 43%, and the
+same long gaps (`-D STARVE=n`, the dense horde 9.9 / 9.9 / 10.9 pictures a second).
+
+Not tried yet, in the order of their likely return:
+* the monster loop and its probes natively (the same results, `tools/logic_test.py` VBL for VBL), the largest part;
+* the flip wait used: the next picture's work that does not touch the ring (the object list, bakes, prepared
+  streams, new tiles into P) done before waiting;
+* `jagpad_poll` only when a pad answered, or less often;
+* the restores per row of each object's own words (as its draw) instead of its whole rectangle.
 
 ![Gauntlet on the STE (Hatari)](docs/screenshot.png)
 

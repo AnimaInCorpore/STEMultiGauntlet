@@ -1,4 +1,4 @@
-# STEGauntlet
+# STEMultiGauntlet
 
 Atari Games' **Gauntlet** (1985) on the **Atari STE**, aimed at fast play and, in the end, networked play over the
 MIDI ports in the spirit of MIDI-Maze: up to four STEs linked in a MIDI ring, every player with a full screen of
@@ -22,8 +22,11 @@ against the original, and the STE's pictures are compared with a reference rende
 - **The game sees the wider screen too:** 24 small patches to the arcade program widen its own screen bounds by
   88 pixels. Players can walk across the whole picture, monsters stay alive there, generators and magic act on
   everything shown, and the camera centres the players in 320 pixels.
-- **Speed:** the game logic runs at the arcade's 60 frames a second. Pictures (Hatari): about 27 a second in light
-  play, 20 with a message box up; large ghost hordes drop well below 25.
+- **Speed:** the game logic runs at the arcade's 60 frames a second. Pictures (Hatari, the attract demo,
+  2026-10-28): 31-37 a second in light play, about 26 over the whole demo, 11-12 in a large ghost horde (about 5
+  in its densest part, where the game's own logic also slows to a third). Objects' shadows are baked in as black
+  (`MO_BLACKSH`), and floor tiles are cached in screen format, which shortens the pauses at camera cuts and level
+  starts. Where the horde's time goes, and what could still be done: `games/gauntlet/README.md`, "The ghost horde".
 - **Networking:** a separate program for up to four STEs in a MIDI ring (`build.py --net`, see
   [Networked play](#networked-play-a-midi-ring)): every machine runs the whole game in lockstep, one player each,
   all on the arcade's shared screen. Tested with four Hatari instances over emulated MIDI cables.

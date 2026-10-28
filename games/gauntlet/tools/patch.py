@@ -109,7 +109,7 @@ HOOK_SIZE = 16
 # not empty yet: wait for the next frame, then call $4802 again; else on at $40F8A)
 SCHEDULE = [(0x40C28, 0x60F8, 0x4E4E), (0x40F88, 0x66F6, 0x4E4D)]
 
-# The wide picture (STEGauntlet: the maze over 320 pixels, the arcade's x 0-319, where the arcade showed 224 of
+# The wide picture (STEMultiGauntlet: the maze over 320 pixels, the arcade's x 0-319, where the arcade showed 224 of
 # them, x 8-231, beside its side panel): the game's own idea of the screen widened by 88 pixels, so players walk,
 # monsters stay alive, generators and the magic act over what is shown, and the camera centres in it.
 # (address, original bytes, new bytes, what): positions are the arcade's x * 128 relative to (x scroll - 8) * 128
