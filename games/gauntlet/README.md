@@ -294,7 +294,7 @@ over the playfield and the bar is empty.
   dark floor); now its middle greys take the new grey.  The title alone (2026-10-29, user) has a palette of its
   own: the fitted scene palette 1 (`tools/assets.py` TITLE_SCENES, scene kind 2), which `render.s` scene_check gives
   a page with the side panel down and no text shown.  On DB15 the heroes' skin came out the capes' red (no flesh
-  tones) and the helmets and bricks a dull purple-blue (no teal); the tables keep DB15 (their yellow and green text).  Chosen by eye over the fitted palettes above: more shades in the sprites, every player and monster
+  tones) and the helmets and bricks a dull purple-blue (no teal); the tables keep DB15 (their yellow and green text).  The text's pen 2 (a glyph's stray pixel: S, s, r, w, $, %, &, ', /) takes pen 3's colour (the letters') when the two are within 3 levels a channel on the arcade (`render.s` pen_remap): the grey text's #dcdcdc on #a9a9a9 came out #ddeedd on #889999, a bright dot on every S.  Chosen by eye over the fitted palettes above: more shades in the sprites, every player and monster
   recognisable.  `tools/assets.py` gives every scene this palette (the scene machinery stays, its choice no longer
   matters), mapped in Oklab with the lightness scaled by 0.5; the status bar keeps its own palette.
   `GAUNTLET_PALETTE=scenes python games/gauntlet/tools/build.py`: the fitted scene palettes again.

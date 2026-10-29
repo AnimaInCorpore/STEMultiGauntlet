@@ -1125,20 +1125,55 @@ pen_remap:
 	cmp.w	#PULSE_PEN+PULSE_N,d0
 	bhs.s	.npu
 	move.b	#PULSE_COL*$11,d5
-	bra.s	.set
+	bra	.set
 .npu:	tst.b	band_mode		; (a band pen on the title: the band's colour)
-	beq.s	.set
+	beq	.set
 	move.w	d0,d7
 	sub.w	#$100,d7
 	cmp.w	#$90,d7
-	bhs.s	.set
+	bhs	.set
 	and.w	#15,d7
 	subq.w	#2,d7
 	cmp.w	#7,d7
-	bhi.s	.set
+	bhi	.set
 	move.b	#BAND_COL*$11,d5
-	bra.s	.set
-.txt:	move.l	scene_idx_p,a3
+	bra	.set
+.txt:	moveq	#3,d7			; (the text: pen 2 is a glyph's stray pixel, S, s, r, w ...: close to pen 3,
+	and.w	d0,d7			;  the letters' colour, on the arcade, it takes pen 3's colour: the STE's nearest
+	cmp.w	#3,d7			;  colours would set it apart; pen 3 changed: pen 2 mapped again)
+	bne.s	.tp2
+	subq.w	#1,d0
+	bsr	pen_remap
+	addq.w	#1,d0
+	lea	pen_rgb,a3
+	move.w	d0,d3
+	add.w	d3,d3
+	move.w	(a3,d3.w),d3
+	bra.s	.tx
+.tp2:	cmp.w	#2,d7
+	bne.s	.tx
+	move.w	d0,d7
+	add.w	d7,d7
+	move.w	2(a3,d7.w),d7		; pen 3's colour
+	movem.l	d1/d2/d4/d6,-(sp)
+	move.w	d3,d1
+	move.w	d7,d4
+	moveq	#3-1,d2
+.tc:	moveq	#15,d5
+	and.w	d1,d5
+	moveq	#15,d6
+	and.w	d4,d6
+	sub.w	d6,d5
+	bpl.s	.tpo
+	neg.w	d5
+.tpo:	cmp.w	#3,d5
+	bhi.s	.tfar
+	lsr.w	#4,d1
+	lsr.w	#4,d4
+	dbf	d2,.tc
+	move.w	d7,d3			; (close: pen 3's colour)
+.tfar:	movem.l	(sp)+,d1/d2/d4/d6
+.tx:	move.l	scene_idx_p,a3
 	move.b	(a3,d3.w),d5
 	move.b	d5,d7
 	lsl.b	#4,d5
