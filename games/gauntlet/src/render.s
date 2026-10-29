@@ -374,7 +374,11 @@ view_check:
 	bsr	scene_check
 	sf	sc_now
 	bsr	pal_sets
-	movem.l	(sp)+,d0-d7/a0-a6
+	bsr	mo_snapshot		; (the objects placed again in the new view: mo_place culls by view_dx, and the
+	tst.b	mo_was_general		;  general walk's records are kept while the objects' RAM stays: the title's
+	beq.s	.vs			;  objects at its right edge were left out until they moved)
+	bsr	mo_ram_copy
+.vs:	movem.l	(sp)+,d0-d7/a0-a6
 	bsr	al_reset
 	bsr	alpha_update
 	move.w	snap_xs,d0
