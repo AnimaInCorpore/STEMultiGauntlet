@@ -1166,7 +1166,8 @@ pen_remap:
 ; the error (scene_err) of their 16 pens' colours (pen_rgb): the playfield's palettes by their tiles in the window, the
 ; text's colours (4 pens) by their shown characters, the objects' palettes by 48 x their objects.  A scene that scores
 ; a fifth below the current one in two checks in a row becomes the current one (scene_switch): only palettes of the
-; picture's kind (fitted with the side panel up or down; one of the other kind is left at once), and not again within
+; picture's kind (scene_panel: 1 the side panel up, 0 down, 2 down without any text: the title; one of another kind
+; is left at once), and not again within
 ; SCENE_HOLD pictures.  Only in the
 ; SCENE_DUE checks after a large colour change (a new level, page or fade): in steady play the palette stays.
 SCENE_DUE = 3				; (the checks after a large colour change: else the palette stays)
@@ -1288,7 +1289,16 @@ scene_check:
 	tst.w	panel_open
 	seq	d5			; (the panel up)
 	and.b	#1,d5
-	lea	scene_panel,a1
+	bne.s	.kd
+	lea	sc_w+16,a0		; (the panel down and no text shown: the title, its own palette, kind 2)
+	moveq	#64-1,d1
+	moveq	#0,d2
+.kt:	or.w	(a0)+,d2
+	dbf	d1,.kt
+	tst.w	d2
+	bne.s	.kd
+	moveq	#2,d5
+.kd:	lea	scene_panel,a1
 	lea	sc_score,a0
 	moveq	#-1,d0			; its scene
 	moveq	#-1,d1			; its score

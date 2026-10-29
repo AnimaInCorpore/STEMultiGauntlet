@@ -19,7 +19,7 @@
     ir4.bin          256 bytes: [I << 4 | C] = the 4-bit channel of an IRGB pen's intensity I and channel C
     scene_cols.bin   SCENE_N x 16 STE words: every scene the port's palette (docs/palette_db15.json: DawnBringer 16
                      without its brown, colour 15 kept free: the title band, a glow), mapped in Oklab with the
-                     lightness x 0.5.  GAUNTLET_PALETTE=scenes: the fitted scene palettes instead (docs/scenes.json,
+                     lightness x 0.5; the title's fitted palette kept beside it (TITLE_SCENES).  GAUNTLET_PALETTE=scenes: the fitted scene palettes instead (docs/scenes.json,
                      ref/scene_palettes.py)
     scene_idx.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> the nearest of the palette's 16 in Oklab
     scene_err.bin    SCENE_N x 4096 bytes: that distance (Oklab x 400, at most 255): render.s scene_pick's score
@@ -27,7 +27,8 @@
                      objects (checker_pairs; GAUNTLET_DITHER = its contrast weight, 0.25; 0: no checker)
     scenes.i         SCENE_N
     ir4s.bin         256 bytes: ir4 as STE nibbles (the title logo's band colours, render.s band_build)
-    scene_panel.bin  SCENE_N bytes: 1 when the palette was fitted to scenes with the side panel up (play), else 0
+    scene_panel.bin  SCENE_N bytes: 1 when the palette was fitted to scenes with the side panel up (play), else 0;
+                     2: the title's (TITLE_SCENES)
     bar_cols.bin     16 STE words: the status bar's own palette (docs/scenes.json "bar"; the Timer B loads it at line 240)
     bar_idx.bin      4096 bytes: an RGB_444 colour -> the nearest of the bar's 16
     bar_sp.bin       8 x 16 longs: [x][c] the plane bits of colour c at pixel x of a byte (plane k in byte k: movep)
@@ -117,6 +118,14 @@ def checker_pairs(lab, pal, weight, n, near, lam):
     return bytes(int(a) << 4 | int(b) for a, b in best)
 
 
+# the fitted scene palettes kept with DB15 (scene numbers as scene_palettes() lists them): 1, fitted to the pages
+# without the side panel, its colour 15 free, as a kind of its own (scene_panel 2): render.s scene_check gives it
+# to a page with the panel down and no text, the title (DB15 has no flesh tones or teal: the heroes' skin came out
+# the capes' red, the helmets and bricks a dull purple-blue); every other page keeps DB15 (the tables' yellow and
+# green text has no colour in this one).
+TITLE_SCENES = {1}
+
+
 def scene_tables(dest):
     pals = scene_palettes()
     doc = json.loads((DOCS / "scenes.json").read_text())
@@ -128,7 +137,7 @@ def scene_tables(dest):
     if target:                                  # the port's palette in every scene (colour 15 free: band / glow)
         db = json.loads((DOCS / "palette_db15.json").read_text())["colours"]
         pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in db] + [[0, 0, 0]])
-        pals = [pal] * len(pals)
+        pals = [p if k in TITLE_SCENES else pal for k, p in enumerate(pals)]
         weight = np.array([0.5, 1, 1])          # (hue shifts cost more than shading shifts)
     lam = float(os.environ.get("GAUNTLET_DITHER", "0.25"))                   # (0: no checker)
     cols, idx, err, pab = bytearray(), bytearray(), bytearray(), bytearray()
@@ -148,7 +157,8 @@ def scene_tables(dest):
     (dest / "scene_err.bin").write_bytes(bytes(err))
     (dest / "scene_pab.bin").write_bytes(bytes(pab))
     (dest / "scenes.i").write_text("SCENE_N = %d\n" % len(pals))
-    (dest / "scene_panel.bin").write_bytes(bytes(int(up) for up in panel))
+    (dest / "scene_panel.bin").write_bytes(bytes(2 if target and k in TITLE_SCENES else int(up)
+                                                 for k, up in enumerate(panel)))
     bar_pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in doc["bar"]["colours"]])
     d = np.sqrt(((lab[:, None] - oklab(bar_pal)[None]) ** 2).sum(2))
     (dest / "bar_idx.bin").write_bytes(d.argmin(1).astype(np.uint8).tobytes())

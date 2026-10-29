@@ -291,7 +291,10 @@ over the playfield and the bar is empty.
   brown (15 colours, colour 0 the near-black $112) plus colour 15 kept free (the title logo's band; a colour-cycled
   glow later).  Since 2026-10-28 its cyan (the rarest colour in play) is a neutral dark grey #333344: the floor's
   dark greys had only #111122 and #554455, a checker of the two between them (twice the arcade's contrast, a rough,
-  dark floor); now its middle greys take the new grey.  Chosen by eye over the fitted palettes above: more shades in the sprites, every player and monster
+  dark floor); now its middle greys take the new grey.  The title alone (2026-10-29, user) has a palette of its
+  own: the fitted scene palette 1 (`tools/assets.py` TITLE_SCENES, scene kind 2), which `render.s` scene_check gives
+  a page with the side panel down and no text shown.  On DB15 the heroes' skin came out the capes' red (no flesh
+  tones) and the helmets and bricks a dull purple-blue (no teal); the tables keep DB15 (their yellow and green text).  Chosen by eye over the fitted palettes above: more shades in the sprites, every player and monster
   recognisable.  `tools/assets.py` gives every scene this palette (the scene machinery stays, its choice no longer
   matters), mapped in Oklab with the lightness scaled by 0.5; the status bar keeps its own palette.
   `GAUNTLET_PALETTE=scenes python games/gauntlet/tools/build.py`: the fitted scene palettes again.
