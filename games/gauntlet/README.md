@@ -134,6 +134,28 @@ Musashi CPU + Blitter a picture (mean): attract 202.2k -> 189.2k, seed 1 level 2
 matching and the cells ~20k), the attract mode's horde (`--seed 0 --first 2500 --frames 2650 --every 1`, 150
 pictures; its first picture differs before and after: drawn without the state before it) 678.6k -> 486.4k.
 
+2026-10-29: **the object list and the per-object steps restructured.**  The records are the ring's lists: each ring
+has two record lists (`MO_L0`-`MO_L3`, 1024 records of 16 bytes, in the runtime's part of the arcade RAM blocks; the
+runtime ends 18 KB lower than before), `mo_snapshot` writes this picture's records into the ring's other one in ring
+coordinates (`ring_target` before the walk; `mo_retarget` when `view_check` moves the target afterwards), and
+`mo_draw` makes it the ring's (`RS_KOFF`).  A record is 7 words plus its palette's epoch (`MR_EP`, `mo_match`):
+matching compares 4 longs, and the rectangle is computed only where something is copied back or tested
+(`mo_rect`), not stored.  `RS_DMG` and the window entry for more than 192 objects are gone (every old record is
+copied back on its own).  `mo_match` keeps a hash table per list (`ko_tabs`, made when the list is new, so the ring's
+list is never hashed again; the key `code x 3 + (x >> 3) + (line >> 1) x 5`: 1.06 probes in the horde, the old one
+3.39), the matched flags stamped, not cleared.  It gives up keeping when fewer than 2 records match (`KO_MIN`,
+measured 1-4): no cells noted, everything drawn as before.  `mo_snapshot` walks the chain once into positions, then
+one inline loop places each entry (as `mo_place`) and writes it whole when its position is at or after the latest
+band start, else after a check of its own bands only (`mo_bands` for the rows of some bands).  Tried and dropped:
+the bands' starts marked in the walk (a running mask, no second pass): 2.5k slower in the attract mode, whose
+chains are long with few objects in the picture.  `mo_draw` computes an object's cells once (`mk_rect`): tested,
+then marked before it is drawn (its strips do not mark again), and marks nothing after the last record that may
+stay.  The baked images' hash takes 16 bytes a slot (no `mulu`).  Exact (`sprite_test.py` 335 pictures, with the
+new `still` and `half` cases; `render_test.py` five scenes).  `render_test.py`, mean a picture, before (the step
+above) -> now: attract 189.2k -> 186.9k, seed 1 level 2 358.8k -> 345.7k, seed 12 level 5 264.7k -> 258.7k, seed
+14 level 9 305.3k -> 292.3k (286.9k before objects stayed: matching ~5k and copying back ~1k remain), the horde
+486.4k -> 435.7k.  Not measured in Hatari yet.
+
 ### The ghost horde
 
 2026-10-28, Hatari (the attract demo's densest horde, VBLs 2250-2750, the build with black shadows and the tile

@@ -55,7 +55,8 @@
 ; README), -D NORENDER=1 no pictures (the game alone).
 ;
 ; Fixed memory: RING0 $200000, RING1 $260400, PFB $2C0800, PFS $2E0800, AIMG $300800, PF_LISTS $30A000, LUTS
-; $31A000, ALUTS $32A000, AL_LISTS $33A000, SPR_POOL $35F800-$3BFFFF, MO_HASH $3C2000-$3C7FFF, BIMG $3E0800-$3E1E7F.
+; $31A000, ALUTS $32A000, AL_LISTS $33A000, SPR_POOL $35F800-$3BFFFF, MO_HASH $3C2000-$3C9FFF, the
+; record lists $3CA000-$3CDFFF and $3D4000-$3DFFFF, BIMG $3E0800-$3E1E7F.
 
 	include	"bar.i"			; (tools/assets.py: BAR_N, BAR_LINES)
 	include	"scenes.i"		; (tools/assets.py: SCENE_N)
@@ -91,18 +92,10 @@ SPR_POOL_END = $3C0000
 AL = 160				; AIMG's bytes a line
 AL_N = 1200				; (30 rows x 40 characters)
 
-KO_MAX = 192				; a ring's objects as drawn last (RS_DMG): key and rectangle, mo_match / mo_draw
-KO_CODE = 0				; the record's words 0-2, its palette's epoch, its place in the ring (pixel x, line
-KO_W1 = 2				; of its top), its rows: equal keys draw equal pixels at the same ring address
-KO_W2 = 4
-KO_EP = 6
-KO_RX = 8
-KO_RL = 10
-KO_R0 = 12
-KO_R1 = 14
-KO_RECT = 16				; ring column.w, columns.w, line.w, lines.w (what it covers)
-KO_SIZE = 24
-DMG_MAX = KO_MAX*KO_SIZE*2/8		; (RS_DMG holds the two lists, RS_KOFF: the current one's offset)
+KO_MAX = 192				; (mo_match: the records that may match the ring's, at most)
+	ifnd KO_MIN
+KO_MIN = 2				; (fewer matches: none kept; measured: 1-4)
+	endc
 MK_ROWS = 112				; the written cells: 8 ring lines x 64 columns a row (mk_bits)
 OVL_MAX = 64
 PEND_MAX = 600
@@ -128,8 +121,7 @@ RS_NDMG = 14
 RS_NOVL = 16
 RS_NPEND = 18
 RS_POVF = 20				; (pending tiles overflowed: the valid rectangle is dropped)
-RS_DMG = 24				; col.w, cols.w, line.w, lines.w
-RS_OVL = RS_DMG+DMG_MAX*8
+RS_OVL = 24
 RS_PEND = RS_OVL+OVL_MAX*OV_SIZE	; tiles to copy from P (video RAM word index: column * 64 + row)
 RS_TR = RS_PEND+PEND_MAX*2		; per character row (30): its transparent characters as drawn in the ring:
 TR_VER = 0				;   the row's version then (row_ver).l
@@ -142,7 +134,7 @@ RS_SAL = RS_TRN+2			; what the ring's last picture was drawn of (pic_same): al_c
 RS_SCOL = RS_SAL+4			;   col_epoch.w, the objects' checksum (mo_hash).l, valid.w
 RS_SMO = RS_SCOL+2
 RS_SOK = RS_SMO+4
-RS_KOFF = RS_SOK+2			; (the ring's list in RS_DMG: 0 or KO_MAX x KO_SIZE)
+RS_KOFF = RS_SOK+2			; (which of the ring's two record lists (mo_lists) is its own: 0 / 1)
 RS_SIZE = RS_KOFF+2
 
 BLT_HT = $ffff8a00
@@ -399,6 +391,7 @@ view_check:
 	move.w	snap_ys,d1
 	bsr	scroll_set
 	bsr	ring_target
+	bsr	mo_retarget		; (this picture's records: at the new target)
 .x:	rts
 
 ; a0 = a ring's state: nothing valid, nothing drawn
@@ -534,10 +527,13 @@ render_frame:
 	move.w	d0,snap_xs
 	move.w	d1,snap_ys
 	bsr	scroll_set
+	bsr	ring_target		; (the records are in its coordinates)
 	tst.b	mo_was_general		; (the general walk is dear: its records kept while its input is the same)
 	beq.s	.full
 	bsr	mo_ram_same
-	beq.s	.kept
+	bne.s	.full
+	bsr	mo_recs_kept
+	bra.s	.kept
 .full:	bsr	mo_snapshot
 	tst.b	mo_was_general
 	beq.s	.kept
@@ -548,7 +544,6 @@ render_frame:
 	subq.w	#1,snap_tries
 	bpl	.snap
 .snapped:
-	bsr	ring_target
 	bsr	pal_update
 	bsr	alpha_update
 	bsr	view_check
@@ -588,14 +583,16 @@ render_frame:
 ; pic_same: Z set when the work ring shows this picture already: drawn last at the same place, with no tiles queued
 ; for it since, of the same characters (al_counter), colours (col_epoch) and objects (mo_hash, the records' checksum)
 pic_same:
-	lea	mo_recs,a0		; the objects' checksum
+	move.l	mo_recp,a0		; the objects' checksum (their words but the epoch)
 	move.w	mo_n,d1
 	moveq	#0,d0
 	move.w	d1,d0
-	mulu	#MR_SIZE/2,d1
 	bra.s	.hn
-.h:	rol.l	#3,d0
+.h:	rept	7
+	rol.l	#3,d0
 	add.w	(a0)+,d0
+	endr
+	addq.l	#2,a0
 .hn:	dbf	d1,.h
 	move.l	d0,mo_hash
 	move.l	cur_ring,a0
@@ -930,7 +927,7 @@ pal_update:
 	beq	.nomo
 	cmp.w	#MO_FADE_LONGS,d0	; a fade, or a change that makes many objects baked again: heavy
 	bhi.s	.heavy
-	lea	mo_recs,a0
+	move.l	mo_recp,a0
 	move.w	mo_n,d1
 	moveq	#0,d0
 	bra.s	.on
@@ -1288,7 +1285,7 @@ scene_check:
 	dbf	d5,.ar
 	; the objects: per palette, 48 x the records (an object of ~6 tiles, its pixels weighing 8 times: the players and
 	; the monsters matter most; as ref/scene_palettes.py's OBJECT_WEIGHT)
-	lea	mo_recs,a0
+	move.l	mo_recp,a0
 	lea	sc_w+16+128,a1
 	move.w	mo_n,d1
 	bra.s	.mn
@@ -3001,6 +2998,58 @@ mk_mark:
 	dbf	d6,.m
 .x:	rts
 
+; mk_rect: record a6's cells (mo_rect) as mk_setup (d4 / d5, a0, d6; N when none).  Uses d0-d3.
+mk_rect:
+	move.l	a4,-(sp)
+	move.l	a6,a4
+	bsr	mo_rect
+	move.l	(sp)+,a4
+	tst.w	d1
+	ble.s	.no
+	tst.w	d3
+	ble.s	.no
+	add.w	d0,d1			; c1, the end
+	ble.s	.no
+	tst.w	d0
+	bpl.s	.c0
+	moveq	#0,d0
+.c0:	cmp.w	#64,d0
+	bge.s	.no
+	cmp.w	#64,d1
+	bls.s	.c1
+	moveq	#64,d1
+.c1:	lsl.w	#3,d0
+	lsl.w	#3,d1
+	lea	mk_from,a0		; columns c0 .. 63 and not c1 .. 63
+	move.l	(a0,d0.w),d4
+	move.l	4(a0,d0.w),d5
+	move.l	(a0,d1.w),d0
+	not.l	d0
+	and.l	d0,d4
+	move.l	4(a0,d1.w),d0
+	not.l	d0
+	and.l	d0,d5
+	add.w	d2,d3
+	subq.w	#1,d3			; the last line
+	bmi.s	.no
+	tst.w	d2
+	bpl.s	.y0
+	moveq	#0,d2
+.y0:	lsr.w	#3,d2			; the first cell row
+	lsr.w	#3,d3			; the last
+	cmp.w	#MK_ROWS-1,d3
+	bls.s	.y1
+	move.w	#MK_ROWS-1,d3
+.y1:	sub.w	d2,d3
+	bmi.s	.no
+	lea	mk_bits,a0
+	lsl.w	#3,d2
+	add.w	d2,a0
+	move.w	d3,d6			; (N clear)
+	rts
+.no:	moveq	#-1,d6			; (N set)
+	rts
+
 ; mk_test: Z clear when a cell of ring columns d0.w (+ d1.w) x lines d2.w (+ d3.w) was written.  Keeps d0-d3/a1-a6.
 mk_test:
 	bsr	mk_setup
@@ -3207,113 +3256,98 @@ copy_piece:
 	bra	blit_go_copy
 
 ; ---------------------------------------------------------------------------------------------------------------------
-; mo_match: this picture's records against the ring's objects as drawn last (its list: RS_NDMG entries of KO_SIZE at
-; ko_oldp, one of the ring's two lists): the other list (ko_newp) gets each record's key and rectangle, mo_kidx the old
-; entry with the same key (-1: none; each old entry matches once).  mk_on when one matched (the cells written from
-; now on noted).  More records than KO_MAX: the new list's last entry is the whole guarded window (never matched: all
-; copied back next time).
+; mo_match: this picture's records (mo_recp, in the ring's other list) against the ring's own as drawn last (RS_NDMG at
+; ko_oldp): equal records (the words, the place in ring coordinates, the rows, the palette's epoch: MR_EP) draw equal
+; pixels at the same ring address.  mo_kidx: per record (the first KO_MAX) the old one equal to it, -1: none; each old
+; one matches once.  mk_on when one matched (the cells written from now on noted).  Each list has a table of its
+; first KO_MAX records by key (ko_tabs), made when it is new.
 mo_match:
-	addq.b	#1,ko_stamp		; (a slot of the hash is this picture's when its high byte is the stamp)
+	addq.b	#1,ko_stamp		; (ko_used: an old record matched this picture when it holds the stamp)
 	bne.s	.st
-	lea	ko_hash,a0
-	move.w	#256-1,d0
-.cl:	clr.w	(a0)+
-	dbf	d0,.cl
+	lea	ko_used,a0
+	moveq	#KO_MAX/4-1,d0
+.cu:	clr.l	(a0)+
+	dbf	d0,.cu
 	move.b	#1,ko_stamp
 .st:	sf	mk_on
+	move.w	#-1,ko_lastc		; (the last record with an old one)
 	move.l	cur_ring,a3
-	lea	RS_DMG(a3),a4
-	lea	RS_DMG(a3),a5
-	move.w	RS_KOFF(a3),d0
-	add.w	d0,a4			; the old list
-	eor.w	#KO_MAX*KO_SIZE,d0
-	add.w	d0,a5			; the new one
-	move.l	a4,ko_oldp
-	move.l	a5,ko_newp
-	move.w	RS_NDMG(a3),d7
-	lea	ko_used,a1
-	lea	ko_hash,a0
+	move.w	ring_index,d1		; the old list's number: ring x 2 + RS_KOFF
+	add.w	d1,d1
+	add.w	RS_KOFF(a3),d1
+	lea	ko_tst,a2
 	moveq	#0,d5
-	move.b	ko_stamp,d5
-	lsl.w	#8,d5			; (a slot: stamp << 8 | index + 1)
-	moveq	#0,d6			; i
-	bra.s	.hn
-.h:	clr.b	(a1,d6.w)
-	move.w	KO_RL(a4),d0		; slot: (line << 3 ^ x ^ code) & 255
-	lsl.w	#3,d0
-	move.w	KO_RX(a4),d1
-	eor.w	d1,d0
-	move.w	(a4),d1
-	eor.w	d1,d0
-	and.w	#255,d0
-	add.w	d0,d0
-.hp:	move.w	(a0,d0.w),d1
-	clr.b	d1
-	cmp.w	d5,d1
-	bne.s	.hput
-	addq.w	#2,d0
-	and.w	#511,d0
-	bra.s	.hp
-.hput:	move.w	d6,d1
-	addq.w	#1,d1
-	or.w	d5,d1
-	move.w	d1,(a0,d0.w)
-	lea	KO_SIZE(a4),a4
-	addq.w	#1,d6
-.hn:	cmp.w	d7,d6
-	blo.s	.h
-	; the new records' keys, rectangles and matches
-	move.l	ko_oldp,a3
+	move.b	(a2,d1.w),d5
+	lsl.w	#8,d5			; (the old list's table: a slot stamp << 8 | index + 1)
+	tst.w	RS_NDMG(a3)
+	bne.s	.on
+	moveq	#1,d5			; (nothing in the ring: no slot is the old list's)
+.on:	lea	ko_tabs,a0
+	move.w	d1,d2
+	lsl.w	#8,d2
+	add.w	d2,d2
+	add.w	d2,a0			; the old list's table
+	eor.w	#1,d1
+	lea	ko_tabs,a1
+	move.w	d1,d2
+	lsl.w	#8,d2
+	add.w	d2,d2
+	add.w	d2,a1			; the new list's (filled now)
+	addq.b	#1,(a2,d1.w)
+	bne.s	.ns
+	move.l	a1,a3
+	moveq	#512/4-1,d2
+.cn:	clr.l	(a3)+
+	dbf	d2,.cn
+	move.b	#1,(a2,d1.w)
+.ns:	moveq	#0,d2
+	move.b	(a2,d1.w),d2
+	lsl.w	#8,d2
+	move.w	d2,ko_nst
+	move.l	ko_oldp,a3		; the old list
 	lea	mo_epoch,a4
-	lea	mo_recs,a6
-	lea	mo_kidx,a2
+	move.l	mo_recp,a6
+	lea	mo_kidx,a5
+	moveq	#0,d6			; i
 	move.w	mo_n,d7
 	cmp.w	#KO_MAX,d7
 	bls.s	.nk
 	move.w	#KO_MAX,d7
 .nk:	bra	.kn
-.k:	move.l	MR_CODE(a6),(a5)	; (the code, word 1)
-	move.w	MR_W2(a6),KO_W2(a5)
-	moveq	#15,d0
-	and.w	MR_W1(a6),d0
-	moveq	#0,d1
-	move.b	(a4,d0.w),d1
-	move.w	d1,KO_EP(a5)
-	move.l	MR_R0(a6),KO_R0(a5)	; (r0, r1)
-	move.w	MR_X(a6),d0
-	add.w	tg_r0,d0		; its ring pixel
-	move.w	d0,KO_RX(a5)
+.k:	moveq	#15,d1
+	and.w	MR_W1(a6),d1
+	move.b	(a4,d1.w),d1		; its palette's epoch (0-255)
+	move.w	d1,MR_EP(a6)
+	move.w	(a6),d0			; the slot: code x 3 + (x >> 3) + (line >> 1) x 5
+	move.w	d0,d1
+	add.w	d0,d0
+	add.w	d1,d0
+	move.w	MR_X(a6),d1
+	asr.w	#3,d1
+	add.w	d1,d0
 	move.w	MR_Y(a6),d1
-	add.w	tg_t,d1			; its top's ring line
-	move.w	d1,KO_RL(a5)
-	move.w	d0,d2			; the rectangle: columns x >> 4 .. (x + W - 1) >> 4 (mo_strip_draw's damage, all
-	asr.w	#4,d2			; its strips), lines top + r0 .. top + r1
-	move.w	d2,KO_RECT(a5)
-	and.w	#15,d0
-	moveq	#$38,d3
-	and.w	MR_W2(a6),d3
-	addq.w	#7,d3			; W - 1: 8 x tiles - 1
-	add.w	d3,d0
-	lsr.w	#4,d0
-	addq.w	#1,d0
-	move.w	d0,KO_RECT+2(a5)
-	move.w	MR_R0(a6),d0
-	add.w	d0,d1
-	move.w	d1,KO_RECT+4(a5)
-	move.w	MR_R1(a6),d1
-	sub.w	d0,d1
-	addq.w	#1,d1
-	move.w	d1,KO_RECT+6(a5)
-	; an equal old entry not matched yet
-	move.w	#-1,(a2)
-	move.w	KO_RL(a5),d0
-	lsl.w	#3,d0
-	move.w	KO_RX(a5),d1
-	eor.w	d1,d0
-	move.w	(a5),d1
-	eor.w	d1,d0
+	asr.w	#1,d1
+	add.w	d1,d0
+	lsl.w	#2,d1
+	add.w	d1,d0
 	and.w	#255,d0
 	add.w	d0,d0
+	; into the new list's table
+	move.w	d0,d1
+	move.w	ko_nst,d3
+.ip:	move.w	(a1,d1.w),d2
+	clr.b	d2
+	cmp.w	d3,d2
+	bne.s	.iput
+	addq.w	#2,d1
+	and.w	#511,d1
+	bra.s	.ip
+.iput:	move.w	d6,d2
+	addq.w	#1,d2
+	or.w	d3,d2
+	move.w	d2,(a1,d1.w)
+	; an equal old record not matched yet
+	move.w	#-1,(a5)
 .lk:	move.w	(a0,d0.w),d1
 	move.w	d1,d2
 	clr.b	d2
@@ -3322,53 +3356,54 @@ mo_match:
 	and.w	#255,d1
 	subq.w	#1,d1			; the old index
 	move.w	d1,d2
-	add.w	d2,d2
-	add.w	d1,d2
-	lsl.w	#3,d2			; (x KO_SIZE)
-	lea	(a3,d2.w),a1
-	move.l	(a1)+,d3
-	cmp.l	(a5),d3
+	lsl.w	#4,d2			; (x MR_SIZE)
+	lea	(a3,d2.w),a2
+	move.l	(a2)+,d2
+	cmp.l	(a6),d2
 	bne.s	.ln
-	move.l	(a1)+,d3
-	cmp.l	4(a5),d3
+	move.l	(a2)+,d2
+	cmp.l	4(a6),d2
 	bne.s	.ln
-	move.l	(a1)+,d3
-	cmp.l	8(a5),d3
+	move.l	(a2)+,d2
+	cmp.l	8(a6),d2
 	bne.s	.ln
-	move.l	(a1),d3
-	cmp.l	12(a5),d3
+	move.l	(a2),d2
+	cmp.l	12(a6),d2
 	bne.s	.ln
-	lea	ko_used,a1
-	tst.b	(a1,d1.w)
-	bne.s	.ln
-	st	(a1,d1.w)
-	move.w	d1,(a2)
-	st	mk_on
+	lea	ko_used,a2
+	move.b	ko_stamp,d2
+	cmp.b	(a2,d1.w),d2
+	beq.s	.ln
+	move.b	d2,(a2,d1.w)
+	move.w	d1,(a5)
+	move.w	d6,ko_lastc
+	addq.b	#1,mk_on		; (the matches, at most 255)
+	bne.s	.lx
+	subq.b	#1,mk_on
 	bra.s	.lx
 .ln:	addq.w	#2,d0
 	and.w	#511,d0
 	bra.s	.lk
-.lx:	lea	KO_SIZE(a5),a5
-	addq.l	#2,a2
-	lea	MR_SIZE(a6),a6
+.lx:	lea	MR_SIZE(a6),a6
+	addq.l	#2,a5
+	addq.w	#1,d6
 .kn:	dbf	d7,.k
-	cmp.w	#KO_MAX,mo_n		; (more records than the list holds: its last entry the whole guarded window)
-	bls.s	.nf
-	move.l	ko_newp,a5
-	lea	(KO_MAX-1)*KO_SIZE(a5),a5
-	move.w	#-1,(a5)
-	move.w	#-1,KO_EP(a5)		; (no record has this key)
-	move.w	w0,d0
-	sub.w	#MCOL,d0
-	move.w	d0,KO_RECT(a5)
-	move.w	#25,KO_RECT+2(a5)
-	move.w	top_t,d0
-	sub.w	#GUARD,d0
-	move.w	d0,KO_RECT+4(a5)
-	move.w	#240+2*GUARD,KO_RECT+6(a5)
-	move.w	#-1,mo_kidx+(KO_MAX-1)*2
-.nf:	tst.b	mk_on			; (an object may stay: the cells written from now on noted)
+	moveq	#0,d0
+	move.b	mk_on,d0
 	beq.s	.x
+	cmp.w	#KO_MIN,d0		; (too few to pay for noting the cells: none stays)
+	bhs.s	.y
+	sf	mk_on
+	move.w	#-1,ko_lastc
+	addq.b	#1,ko_stamp		; (no old record matched)
+	bne.s	.x
+	lea	ko_used,a0
+	moveq	#KO_MAX/4-1,d0
+.cv:	clr.l	(a0)+
+	dbf	d0,.cv
+	move.b	#1,ko_stamp
+	rts
+.y:	st	mk_on			; (an object may stay: the cells written from now on noted)
 	bsr	mk_clear
 .x:	rts
 
@@ -3379,17 +3414,39 @@ mo_restore:
 	move.l	ko_oldp,a4
 	moveq	#0,d6
 	bra.s	.rn
-.r:	lea	ko_used,a0
-	tst.b	(a0,d6.w)
-	bne.s	.rk
-	movem.w	KO_RECT(a4),d0-d3
+.r:	cmp.w	#KO_MAX,d6
+	bhs.s	.c
+	lea	ko_used,a0
+	move.b	ko_stamp,d0
+	cmp.b	(a0,d6.w),d0
+	beq.s	.rk
+.c:	bsr	mo_rect
 	movem.l	d6-d7/a4,-(sp)
 	bsr	copy_rect_s
 	movem.l	(sp)+,d6-d7/a4
-.rk:	lea	KO_SIZE(a4),a4
+.rk:	lea	MR_SIZE(a4),a4
 	addq.w	#1,d6
 .rn:	cmp.w	d7,d6
 	blo.s	.r
+	rts
+
+; mo_rect: record a4 -> what it covers: ring column d0.w, columns d1.w, line d2.w, lines d3.w (mo_strip_draw's
+; damage, all its strips: columns x >> 4 .. (x + W - 1) >> 4, lines top + r0 .. top + r1)
+mo_rect:
+	move.w	MR_X(a4),d0
+	moveq	#$38,d1
+	and.w	MR_W2(a4),d1
+	addq.w	#7,d1			; W - 1: 8 x tiles - 1
+	add.w	d0,d1
+	asr.w	#4,d1
+	asr.w	#4,d0
+	sub.w	d0,d1
+	addq.w	#1,d1
+	move.w	MR_R0(a4),d2
+	move.w	MR_R1(a4),d3
+	sub.w	d2,d3
+	addq.w	#1,d3
+	add.w	MR_Y(a4),d2
 	rts
 
 ; dmg_add: ring columns d0 (+ d1) x lines d2 (+ d3) are drawn (an object: the ring's list keeps its rectangle,
@@ -3886,7 +3943,7 @@ al_trans_char:
 ; ---------------------------------------------------------------------------------------------------------------------
 ; The motion objects.  MAME draws each band of 8 lines from the band's SLIP entry along the links until an entry
 ; repeats, every object clipped to the band, later ones over earlier ones.  mo_snapshot (while no VBL comes) turns
-; that into draw records (mo_recs: the object's words, its place, the rows to draw) in drawing order:
+; that into draw records (mo_recp: the object's words, its place in ring coordinates, the rows to draw) in drawing order:
 ; - the usual case: the visible bands' lists are suffixes of one chain (walked once from the first band; a band
 ;   whose start comes before the chain's first entry and leads to it extends the chain at its front).  An object at
 ;   chain position p is drawn in band k when the band's start is at a position <= p: whole when every band it covers
@@ -3894,7 +3951,7 @@ al_trans_char:
 ; - anything else (lists that merge elsewhere, or loop apart): every band walked, its objects' rows in that band.
 ; An object is 1-8 x 1-8 tiles of 8 x 8 (codes code, code + 1, ... row by row; flip x mirrors), pen 0 transparent,
 ; pen 1 the shadow (the playfield's colour from P' there), its palette 16 pens from $100.
-MO_RECS = 1536
+MO_RECS = 1024
 MR_CODE = 0				; a record: the words 0-2, the arcade's x and y of its top left, its rows r0 .. r1
 MR_W1 = 2
 MR_W2 = 4
@@ -3902,11 +3959,16 @@ MR_X = 6
 MR_Y = 8
 MR_R0 = 10
 MR_R1 = 12
-MR_SIZE = 14
+MR_EP = 14				; (mo_match: the palette's epoch)
+MR_SIZE = 16
 	ifnd MO_PREP
 MO_PREP = 1				; (-D MO_PREP=0: the rows' loops, every row the strip's words)
 	endc
-MO_HASH = $3C2000			; the baked images: 2048 x (key.l, key2.l, address.l)
+MO_HASH = $3C2000			; the baked images: 2048 x (key.l, key2.l, address.l, -)
+MO_L0 = $3CA000				; the record lists (MO_RECS x MR_SIZE each; ring 0's two, ring 1's: mo_lists_set),
+MO_L1 = $3D4000				; in the runtime's part of the arcade's RAM blocks (tools/patch.py MAP)
+MO_L2 = $3D8000
+MO_L3 = $3DC000
 	if MO_PREP
 IMG_HDR = 8+16*4			; (an image's header: rows, sw, tw, -; MO_PREP: its prepared stream per shift)
 PREP_MAX = 64*44+8			; (a stream at most: a group and a row per row, opaque and shadow)
@@ -3916,6 +3978,10 @@ IMG_HDR = 8
 MO_HASH_N = 2048
 
 mo_snapshot:
+	bsr	mo_lists_set
+	move.l	mo_recp,mo_recl		; (made at this target: mo_recs_kept)
+	move.w	tg_r0,mo_tgl
+	move.w	tg_t,mo_tgl+2
 	sf	mo_was_general
 	clr.w	mo_n
 	addq.w	#1,mo_pstamp
@@ -3950,7 +4016,7 @@ mo_snapshot:
 	move.w	snap_xs,d0
 	and.w	#511,d0
 	move.w	d0,mo_xs
-	; the first band's chain
+	; the first band's chain (mo_order, mo_vis: the entries x 2)
 	lea	ARC_VRAM+$3800,a0	; (the links: the fourth plane of 1024 words)
 	lea	mo_stamps,a1
 	lea	mo_pos,a2
@@ -3962,38 +4028,39 @@ mo_snapshot:
 	lea	ARC_VRAM+$5F80,a4
 	move.w	(a4,d0.w),d1
 	and.w	#$3ff,d1
+	add.w	d1,d1
 	moveq	#0,d6			; the position
 	lea	ARC_VRAM+$3000,a6	; (the y plane: the entries in the picture's lines noted in mo_vis)
 	lea	mo_vis,a5
 	move.w	sy,d7
-.w1:	move.w	d1,d0
-	add.w	d0,d0
-	cmp.w	(a1,d0.w),d5
-	beq	.w1e
-	move.w	d5,(a1,d0.w)
-	move.w	d6,(a2,d0.w)
+.w1:	cmp.w	(a1,d1.w),d5
+	beq.s	.w1e
+	move.w	d5,(a1,d1.w)
+	move.w	d6,(a2,d1.w)
 	move.w	d1,(a3)+
 	addq.w	#1,d6
-	move.w	(a6,d0.w),d4		; (y + lines: 1 .. 303 when it may be visible)
+	move.w	(a6,d1.w),d4		; (y + lines: 1 .. 303 when it may be visible)
 	lsr.w	#7,d4
 	neg.w	d4
 	sub.w	d7,d4
 	and.w	#511,d4
-	beq	.inv
+	beq.s	.inv
 	cmp.w	#240+64,d4
-	bhs	.inv
+	bhs.s	.inv
 	move.w	d1,(a5)+
-.inv:	move.w	(a0,d0.w),d1
+.inv:	move.w	(a0,d1.w),d1
 	and.w	#$3ff,d1
-	bra	.w1
+	add.w	d1,d1
+	bra.s	.w1
 .w1e:	move.w	d6,mo_count
 	sub.l	#mo_vis,a5
 	move.w	a5,d0
 	lsr.w	#1,d0
 	move.w	d0,mo_nvis
 	clr.w	mo_front		; (the entries put in front)
-	; the other bands' starts
+	; the other bands' starts (mo_bstart: their positions; mo_bmax the latest)
 	lea	mo_bstart,a5
+	move.w	#-32768,mo_bmax
 	moveq	#0,d7			; k
 .bk:	move.w	mo_band0,d0
 	add.w	d7,d0
@@ -4004,41 +4071,126 @@ mo_snapshot:
 	move.w	d1,d0
 	add.w	d0,d0
 	cmp.w	(a1,d0.w),d5
-	beq	.known
+	beq.s	.known
 	bsr	mo_front_walk		; (a start not on the chain: in front of it, or the general way)
 	bne	mo_general
 	move.w	d1,d0
 	add.w	d0,d0
-.known:	move.w	(a2,d0.w),(a5)+
-	addq.w	#1,d7
+.known:	move.w	(a2,d0.w),d0
+	move.w	d0,(a5)+
+	cmp.w	mo_bmax,d0
+	ble.s	.bm
+	move.w	d0,mo_bmax
+.bm:	addq.w	#1,d7
 	cmp.w	mo_nb,d7
-	blo	.bk
+	blo.s	.bk
 	; the records, in the chain's order
 	lea	mo_vis,a3		; (the chain's entries in the picture's lines)
-	move.w	mo_nvis,d0
+	move.w	mo_nvis,d7
 	tst.w	mo_front
-	beq	.v
+	beq.s	.v
 	lea	mo_order+2048,a3	; (entries put in front: all of them)
 	move.w	mo_front,d0
 	add.w	d0,d0
 	sub.w	d0,a3
-	move.w	mo_count,d0
-	add.w	mo_front,d0
-.v:	move.w	d0,mo_left
-	lea	mo_recs,a6
-	lea	ARC_VRAM+$3000,a0
-	lea	ARC_VRAM+$2800,a1
-.r:	subq.w	#1,mo_left
-	bmi	.done
-	move.w	(a3)+,d1		; the entry
-	bsr	mo_place		; -> d2 x, d3 y, d4 lines; Z: not visible
-	beq	.r
-	move.w	d1,d0
-	add.w	d0,d0
-	move.w	(a2,d0.w),d0		; its position
-	; the bands it covers: k0 = (max(y, 0) + e) >> 3 .. k1 = (min(y + lines - 1, 239) + e) >> 3
+	move.w	mo_count,d7
+	add.w	mo_front,d7
+.v:	move.l	mo_recp,a6
+	lea	ARC_VRAM+$3000,a0	; (the y plane: word 2)
+	lea	ARC_VRAM+$2800,a1	; (the x plane: word 1)
+	lea	ARC_VRAM+$2000,a4	; (the codes)
+	move.w	sy,d6
+	bra	.rn
+.r:	move.w	(a3)+,d1		; the entry x 2 (as mo_place)
+	move.w	(a0,d1.w),d4		; y 7-15, flip 6, width - 1 3-5, height - 1 0-2
+	move.w	d4,d3
+	lsr.w	#7,d3
+	neg.w	d3
+	sub.w	d6,d3
+	and.w	#511,d3			; t = y + lines (mod 512): visible when 0 < t < 240 + lines
+	beq	.rn
+	cmp.w	#240+64,d3
+	bhs	.rn
+	moveq	#7,d2
+	and.w	d4,d2
+	addq.w	#1,d2
+	lsl.w	#3,d2			; the lines
+	sub.w	d2,d3			; y (-64 .. 239)
+	cmp.w	#240,d3
+	bge	.rn
+	move.w	(a1,d1.w),d0
+	lsr.w	#7,d0
+	sub.w	mo_xs,d0
+	and.w	#511,d0
+	cmp.w	#336,d0
+	blo.s	.x
+	sub.w	#512,d0			; x
+.x:	move.w	d0,d5
+	sub.w	view_dx,d5
+	cmp.w	#320,d5			; (the picture: the arcade's x view_dx .. + 319)
+	bge	.rn
+	lsr.w	#3,d4
+	and.w	#7,d4
+	addq.w	#1,d4
+	lsl.w	#3,d4			; the width
+	add.w	d4,d5			; (its right end past view_dx)
+	ble	.rn
+	cmp.l	mo_rend,a6
+	bhs	.rn
+	move.w	d0,MR_X(a6)
+	move.w	(a2,d1.w),d5		; its position
+	cmp.w	mo_bmax,d5
+	bge.s	.whole			; (at or after every band's start)
+	; the bands it covers: k0 = (max(y, 0) + e) >> 3 .. k1 = (min(y + lines - 1, 239) + e) >> 3: whole when each
+	; starts at or before it
+	move.w	d3,d4
+	bpl.s	.y0
+	moveq	#0,d4
+.y0:	add.w	mo_e,d4
+	lsr.w	#3,d4			; k0
+	lea	mo_bstart,a5
+	add.w	d4,a5
+	add.w	d4,a5
+	move.w	d3,d0
+	add.w	d2,d0
+	subq.w	#1,d0
+	cmp.w	#239,d0
+	ble.s	.y1
+	move.w	#239,d0
+.y1:	add.w	mo_e,d0
+	lsr.w	#3,d0			; k1
+	sub.w	d4,d0
+.ck:	cmp.w	(a5)+,d5
+	blt.s	.part
+	dbf	d0,.ck
+.whole:	move.w	(a4,d1.w),(a6)+		; MR_CODE
+	move.w	(a1,d1.w),(a6)+		; MR_W1
+	move.w	(a0,d1.w),(a6)+		; MR_W2
+	move.w	tg_r0,d0
+	add.w	d0,(a6)+		; (MR_X: ring coordinates)
+	add.w	tg_t,d3
+	move.w	d3,(a6)+
+	clr.w	(a6)+
+	subq.w	#1,d2
+	move.w	d2,(a6)+
+	addq.l	#2,a6			; (MR_EP)
+	addq.w	#1,mo_n
+.rn:	dbf	d7,.r
+	rts
+.part:	movem.l	d6-d7,-(sp)		; some bands only: the rows of each band that does
+	move.w	d2,d4
+	move.w	MR_X(a6),d2
+	move.w	d5,d0
+	lsr.w	#1,d1
+	bsr	mo_bands
+	movem.l	(sp)+,d6-d7
+	bra.s	.rn
+
+; mo_bands: entry d1 at x d2, y d3 (d4 lines), chain position d0, drawn by some of the bands it covers: the rows of
+; each band that does (its start at or before the entry), records at a6
+mo_bands:
 	move.w	d3,d5
-	bpl	.y0
+	bpl.s	.y0
 	moveq	#0,d5
 .y0:	add.w	mo_e,d5
 	lsr.w	#3,d5			; k0
@@ -4046,32 +4198,15 @@ mo_snapshot:
 	add.w	d4,d6
 	subq.w	#1,d6
 	cmp.w	#239,d6
-	ble	.y1
+	ble.s	.y1
 	move.w	#239,d6
 .y1:	add.w	mo_e,d6
 	lsr.w	#3,d6			; k1
 	lea	mo_bstart,a5
-	move.w	d5,d7
-	add.w	d7,d7
-	add.w	d7,a5
-	move.w	d5,d7
-.ck:	cmp.w	(a5)+,d0
-	blt	.part
-	addq.w	#1,d7
-	cmp.w	d6,d7
-	bls	.ck
-	; every band draws it: whole
-	moveq	#0,d5
-	move.w	d4,d6
-	subq.w	#1,d6
-	bsr	mo_record
-	bra	.r
-.part:	; some bands only: the rows of each band that does
-	lea	mo_bstart,a5
 .pk:	move.w	d5,d7
 	add.w	d7,d7
 	cmp.w	(a5,d7.w),d0
-	blt	.pn
+	blt.s	.pn
 	movem.w	d0/d5-d6,-(sp)
 	move.w	d5,d7
 	lsl.w	#3,d7
@@ -4079,14 +4214,80 @@ mo_snapshot:
 	move.w	d7,d5
 	addq.w	#7,d7			; its last
 	bsr	mo_lines		; -> rows d5 .. d6 of the object in those lines
-	bmi	.pz
+	bmi.s	.pz
 	bsr	mo_record
 .pz:	movem.w	(sp)+,d0/d5-d6
 .pn:	addq.w	#1,d5
 	cmp.w	d6,d5
-	bls	.pk
-	bra	.r
-.done:	rts
+	bls.s	.pk
+	rts
+
+; mo_lists_set: this picture's records go into the work ring's other list (mo_recp, mo_rend); the ring's own is
+; ko_oldp
+MO_LIST = MO_RECS*MR_SIZE
+mo_lists_set:
+	move.l	cur_ring,a0
+	move.w	ring_index,d0
+	lsl.w	#3,d0
+	move.w	RS_KOFF(a0),d1
+	add.w	d1,d1
+	add.w	d1,d1
+	add.w	d1,d0			; (ring x 2 + list) x 4
+	lea	mo_lptr,a1
+	move.l	(a1,d0.w),ko_oldp
+	eor.w	#4,d0			; (the other one)
+	move.l	(a1,d0.w),a1
+	move.l	a1,mo_recp
+	add.l	#MO_LIST,a1
+	move.l	a1,mo_rend
+	rts
+mo_lptr:
+	dc.l	MO_L0,MO_L1,MO_L2,MO_L3
+
+; mo_retarget: this picture's records (made at the target mo_tgl) moved to the target tg_r0, tg_t
+mo_retarget:
+	move.l	mo_recp,a0
+	move.w	tg_r0,d2
+	sub.w	mo_tgl,d2
+	move.w	tg_t,d3
+	sub.w	mo_tgl+2,d3
+	move.w	mo_n,d0
+	bra.s	.n
+.c:	add.w	d2,MR_X(a0)
+	add.w	d3,MR_Y(a0)
+	lea	MR_SIZE(a0),a0
+.n:	dbf	d0,.c
+	move.w	tg_r0,mo_tgl
+	move.w	tg_t,mo_tgl+2
+	rts
+
+; mo_recs_kept: the general walk's records (mo_ram_same: of the same input) into this picture's list from the one
+; they were made in (at its ring coordinates: moved by the targets' difference)
+mo_recs_kept:
+	bsr	mo_lists_set
+	move.l	mo_recl,a0
+	move.l	mo_recp,a1
+	move.w	tg_r0,d2
+	sub.w	mo_tgl,d2
+	move.w	tg_t,d3
+	sub.w	mo_tgl+2,d3
+	move.w	mo_n,d0
+	bra.s	.n
+.c:	move.l	(a0)+,(a1)+
+	move.w	(a0)+,(a1)+
+	move.w	(a0)+,d1
+	add.w	d2,d1
+	move.w	d1,(a1)+
+	move.w	(a0)+,d1
+	add.w	d3,d1
+	move.w	d1,(a1)+
+	move.l	(a0)+,(a1)+
+	move.w	(a0)+,(a1)+
+.n:	dbf	d0,.c
+	move.l	mo_recp,mo_recl
+	move.w	tg_r0,mo_tgl
+	move.w	tg_t,mo_tgl+2
+	rts
 
 ; mo_ram_same: Z set when the objects' RAM ($2000-$3FFF), the SLIPs and the scroll equal mo_copy (the general walk's
 ; input last time).  mo_ram_copy: they copied there.
@@ -4150,17 +4351,17 @@ mo_front_walk:
 	move.w	mo_front,d2
 	add.w	d2,d2
 	sub.w	d2,a3
-	cmp.w	(a3),d1
+	cmp.w	(a3),d0
 	bne	.no			; (it joins inside the chain)
 	; the walked entries before the chain's first: positions first - 1, first - 2, ... from the last walked one
 	move.w	(a2,d0.w),d2		; the first's position
 .pf:	subq.w	#1,d6
 	bmi	.ok
 	move.w	-(a5),d1
-	move.w	d1,-(a3)
 	subq.w	#1,d2
 	move.w	d1,d0
 	add.w	d0,d0
+	move.w	d0,-(a3)
 	move.w	d2,(a2,d0.w)
 	addq.w	#1,mo_front
 	bra	.pf
@@ -4175,7 +4376,7 @@ mo_front_walk:
 mo_general:
 	st	mo_was_general
 	clr.w	mo_n
-	lea	mo_recs,a6
+	move.l	mo_recp,a6
 	moveq	#0,d7			; k
 .bk:	addq.w	#1,mo_stamp		; (a new walk)
 	bne	.st
@@ -4340,52 +4541,73 @@ mo_record:
 	move.w	(a0,d1.w),(a6)+		; MR_W2
 	move.w	(sp)+,d1
 	move.l	(sp)+,a0
-	move.w	d2,(a6)+
-	move.w	d3,(a6)+
+	move.w	tg_r0,(a6)		; (ring coordinates)
+	add.w	d2,(a6)+
+	move.w	tg_t,(a6)
+	add.w	d3,(a6)+
 	move.w	d5,(a6)+
 	move.w	d6,(a6)+
+	addq.l	#2,a6			; (MR_EP)
 .full:	rts
 
 ; mo_draw: the records into the work ring (mo_place kept only those in the picture).  A record the ring has as it was
 ; (mo_match: the same key, so the same pixels at the same place) is left as it is when none of its cells was written
 ; this picture (copied back, tiles, an object drawn before it) and every object left so far was below it then (their
-; old order kept); else it is drawn.  Then this picture's list (ko_newp) becomes the ring's.
+; old order kept); else it is drawn.  Then this picture's list (mo_recp) becomes the ring's.
 mo_draw:
-	lea	mo_recs,a6
-	move.l	ko_newp,a5
-	lea	mo_kidx,a4
-	moveq	#-1,d5			; the last one left: its old index
-	moveq	#0,d6			; the record
+	move.l	mo_recp,a6
+	lea	mo_kidx,a5
+	move.w	#-1,ko_lastk		; (the last one left: its old index)
+	moveq	#0,d7			; the record
 	bra	.n
-.r:	cmp.w	#KO_MAX-1,d6
-	bhs.s	.draw
-	move.w	(a4),d0
-	bmi.s	.draw
-	cmp.w	d5,d0
-	ble.s	.draw			; (one left before it was above it)
-	movem.w	KO_RECT(a5),d0-d3
-	movem.l	d5-d6/a4-a6,-(sp)
-	bsr	mk_test
-	movem.l	(sp)+,d5-d6/a4-a6
-	bne.s	.draw
-	move.w	(a4),d5			; left as it is
+.r:	tst.b	mk_on
+	beq.s	.draw
+	cmp.w	ko_lastc,d7
+	bls.s	.cd
+	sf	mk_on			; (no record after this one may stay: no cells to note)
+	bra.s	.draw
+.cd:	bsr	mk_rect			; its cells
+	bmi.s	.nc
+	move.w	(a5),d0
+	bmi.s	.mark
+	cmp.w	ko_lastk,d0
+	ble.s	.mark			; (one left before it was above it)
+	move.l	a0,a1			; one of them written this picture?
+	move.w	d6,d1
+.t:	move.l	(a1)+,d0
+	and.l	d4,d0
+	bne.s	.mark
+	move.l	(a1)+,d0
+	and.l	d5,d0
+	bne.s	.mark
+	dbf	d1,.t
+.keep:	move.w	(a5),ko_lastk		; left as it is
 	bra.s	.nx
-.draw:	movem.l	d5-d6/a4-a6,-(sp)
+.nc:	move.w	(a5),d0			; (no cells: as none written)
+	bmi.s	.draw
+	cmp.w	ko_lastk,d0
+	bgt.s	.keep
+	bra.s	.draw
+.mark:	or.l	d4,(a0)+		; drawn: its cells written (not its strips' again: touch)
+	or.l	d5,(a0)+
+	dbf	d6,.mark
+	sf	mk_on
+	movem.l	d7/a5-a6,-(sp)
 	bsr	mo_object
-	movem.l	(sp)+,d5-d6/a4-a6
+	movem.l	(sp)+,d7/a5-a6
+	st	mk_on
+	bra.s	.nx
+.draw:	movem.l	d7/a5-a6,-(sp)
+	bsr	mo_object
+	movem.l	(sp)+,d7/a5-a6
 .nx:	lea	MR_SIZE(a6),a6
-	lea	KO_SIZE(a5),a5
-	addq.l	#2,a4
-	addq.w	#1,d6
-.n:	cmp.w	mo_n,d6
+	addq.l	#2,a5
+	addq.w	#1,d7
+.n:	cmp.w	mo_n,d7
 	blo	.r
-	move.w	mo_n,d0			; this picture's list (ko_newp): the ring's
-	cmp.w	#KO_MAX,d0
-	bls.s	.c
-	move.w	#KO_MAX,d0
-.c:	move.l	cur_ring,a3
-	move.w	d0,RS_NDMG(a3)
-	eor.w	#KO_MAX*KO_SIZE,RS_KOFF(a3)	; (the new list: the ring's)
+	move.l	cur_ring,a3		; this picture's list (mo_recp): the ring's
+	move.w	mo_n,RS_NDMG(a3)
+	eor.w	#1,RS_KOFF(a3)
 	rts
 
 ; mo_object: record a6 into the target (tg_*): its strips of up to 32 pixels (4 tiles), each a baked image
@@ -4410,13 +4632,11 @@ mo_object:
 	moveq	#4,d0
 .tw:	move.w	d0,ob_tw
 	bsr	mo_image		; -> a0
-	move.w	MR_X(a6),d4
-	add.w	tg_r0,d4
+	move.w	MR_X(a6),d4		; (ring coordinates)
 	move.w	ob_strip,d0
 	lsl.w	#5,d0
 	add.w	d0,d4			; the strip's pixel in the target
-	move.w	MR_Y(a6),d5
-	add.w	tg_t,d5			; the object's first line in the target
+	move.w	MR_Y(a6),d5		; the object's first line in the target
 	move.l	a6,-(sp)
 	bsr	mo_strip_draw
 	move.l	(sp)+,a6
@@ -4464,9 +4684,9 @@ mo_image:
 	move.w	d0,d6			; (the first slot)
 	moveq	#8-1,d5
 .probe:	move.w	d0,d4
-	mulu	#12,d4
+	lsl.w	#4,d4			; (16 bytes a slot)
 	lea	MO_HASH,a0
-	add.l	d4,a0
+	add.w	d4,a0
 	cmp.l	(a0),d2
 	bne	.nx
 	cmp.l	4(a0),d3
@@ -4480,9 +4700,9 @@ mo_image:
 	dbf	d5,.probe
 	move.w	d6,d0			; (no room: the first slot taken over)
 	move.w	d0,d4
-	mulu	#12,d4
+	lsl.w	#4,d4
 	lea	MO_HASH,a0
-	add.l	d4,a0
+	add.w	d4,a0
 .empty:	; room in the pool?  (an image: 8 + 8 rows + 8 sw rows bytes at most: 8 + 8 * 64 + 16 * 64)
 	move.l	mo_pool,d4
 	add.l	#IMG_HDR+8*64+16*64,d4
@@ -4504,7 +4724,7 @@ mo_image:
 ; mo_flush: every baked image forgotten
 mo_flush:
 	lea	MO_HASH,a0
-	move.w	#MO_HASH_N*3-1,d0
+	move.w	#MO_HASH_N*4-1,d0
 	moveq	#-1,d1
 .c:	move.l	d1,(a0)+
 	dbf	d0,.c
@@ -5860,10 +6080,17 @@ ob_row:		ds.l	4
 ob_img:		ds.l	1
 ob_sort:	ds.b	12*64
 work_base:	ds.l	1
-ko_oldp:	ds.l	1		; (mo_match: the ring's list, this picture's)
-ko_newp:	ds.l	1
-ko_hash:	ds.w	256
+ko_oldp:	ds.l	1		; (the ring's own records: mo_lists_set)
+mo_recp:	ds.l	1		; (this picture's records: mo_lists_set)
+mo_rend:	ds.l	1
+mo_recl:	ds.l	1		; (the last ones made, at the target mo_tgl: mo_recs_kept)
+mo_tgl:		ds.w	2
 mo_kidx:	ds.w	KO_MAX
+ko_tabs:	ds.w	4*256		; (mo_match: per ring and list, its entries by key: stamp << 8 | index + 1)
+ko_tst:		ds.b	4
+ko_nst:		ds.w	1
+ko_lastc:	ds.w	1
+ko_lastk:	ds.w	1
 mk_bits:	ds.l	MK_ROWS*2	; (the cells written this picture: touch)
 mk_from:	ds.l	65*2		; (mk_init)
 ko_used:	ds.b	KO_MAX
@@ -5914,10 +6141,10 @@ mo_e:		ds.w	1
 mo_band0:	ds.w	1
 mo_nb:		ds.w	1
 mo_xs:		ds.w	1
-mo_count:	ds.w	1
 mo_front:	ds.w	1
-mo_left:	ds.w	1
+mo_bmax:	ds.w	1
 mo_nvis:	ds.w	1
+mo_count:	ds.w	1
 map_n:		ds.w	1
 mo_pstamp:	ds.w	1
 ob_w:		ds.w	1
@@ -6065,11 +6292,10 @@ mo_pos:		ds.w	1024
 mo_order:	ds.w	2048+1024
 mo_walk:	ds.w	1024
 mo_vis:		ds.w	1024
+mo_bstart:	ds.w	32
 map_tab:	ds.b	255*16
 mp_stamp:	ds.w	1024
 mp_data:	ds.w	4*1024
-mo_bstart:	ds.w	32
-mo_recs:	ds.b	MO_RECS*MR_SIZE
 ring_state0:	ds.b	RS_SIZE
 ring_state1:	ds.b	RS_SIZE
 	section	text,code

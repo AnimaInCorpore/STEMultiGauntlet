@@ -13,6 +13,8 @@ last):
           other (later over earlier, a shadow over an earlier object shows the playfield's shadow);
   bands   a band list that starts after an object (MAME draws it only in the bands whose lists hold it) and lists that
           merge in a tree (the general way);
+  still   the general way's pictures unchanged (its records kept), and half a crowd standing while the other half
+          moves over and under it (unchanged objects left in the ring, drawn again where something was written);
   panel   the panel's characters transparent (the title's and the high scores' way): objects at the arcade's x 232-319;
   64k     the ring's 64 KB boundaries: the scroll set so that objects straddle them (checked: the test fails when no
           drawn row crossed one).
@@ -132,6 +134,19 @@ def main():
         check("bands", objs, xs0, ys, {b0 + k: 2 for k in range(10, 40)})
         tree = {b0 + k: (1 if (k >> 1) & 1 else 2) for k in range(0, 40)}  # lists 1, 3 and 2, 3: they merge
         check("tree", objs, xs0, ys, tree, links={1: 3, 2: 3})
+    # still: the general walk's records kept while its input is the same (mo_recs_kept), unchanged objects left in
+    # the ring; half a crowd standing while the other half moves over and under it (those left drawn again where
+    # something was written over them, in their order)
+    b0 = (((ys0 >> 7) - 1) & 511) >> 3
+    tree = {b0 + k: (1 if (k >> 1) & 1 else 2) for k in range(0, 40)}
+    objs = [(436, 3, 3, 2, 0, 50, 60), (445, 3, 3, 5, 1, 60, 70), (764, 2, 2, 0, 0, 120, 90)]
+    for i in range(6):
+        check("still", objs, xs0, ys0, tree, links={1: 3, 2: 3})
+    for i in range(24):
+        objs = [(OBJECTS[k % 5][0], OBJECTS[k % 5][1], OBJECTS[k % 5][2], k & 15, k & 1,
+                 60 + ((k * 13 + (i * 3 if k & 1 else 0)) % 90), 40 + ((k * 7 + (i * 2 if k & 1 else 0)) % 110))
+                for k in range(20)]
+        check("half", objs, xs0, ys0)
     # the panel transparent: objects at the arcade's x 232-335 too
     v = bytearray(vram0)
     for row in range(30):
