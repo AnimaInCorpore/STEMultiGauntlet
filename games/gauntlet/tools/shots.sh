@@ -4,7 +4,8 @@
 # letter or digit (mapped through TOS's layout: German TOS swaps y / z) or an ST scancode (0x4d right, 0x4b left, 0x48 up,
 # 0x50 down, 0x39 space = fire, 0x2d x = magic / start, 0x06 5 = coin 1); Hatari takes no other key names:
 #   games/gauntlet/tools/shots.sh shot@20 down:Right@30 up:Right@36 shot@40 ...
-# PRG=... another build (default run/gauntlet/GAUNTLET.PRG); OUT=dir (default /tmp/gshots).  Kills only its own Hatari.
+# PRG=... another build (default run/gauntlet/GAUNTLET.PRG); OUT=dir (default /tmp/gshots).
+# MEMSIZE=14 (development default; 4 for current small-memory checks). Kills only its own Hatari.
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 HATARI=${HATARI:-/Users/saschaspringer/Work/F030Arcade/third_party/hatari/build/src/hatari}
 TOS=${TOS:-/Users/saschaspringer/Work/F030Arcade/third_party/tos/tos206de.img}
@@ -13,7 +14,7 @@ PRG=${PRG:-$ROOT/run/gauntlet/GAUNTLET.PRG}
 RUN=$(dirname "$PRG")
 mkdir -p "$OUT"; rm -f "$RUN/CRASH.TXT" "$OUT/cmd.fifo"
 cd "$RUN"
-"$HATARI" --machine "${MACHINE:-ste}" --memsize 4 ${HATARI_ARGS:-} --tos "$TOS" --fast-boot true --cpu-exact true --compatible true \
+"$HATARI" --machine "${MACHINE:-ste}" --memsize "${MEMSIZE:-14}" ${HATARI_ARGS:-} --tos "$TOS" --fast-boot true --cpu-exact true --compatible true \
   --sound off --confirm-quit off --statusbar false --cmd-fifo "$OUT/cmd.fifo" --log-file "$OUT/hatari.log" "$(basename "$PRG")" > /dev/null 2>&1 &
 HP=$!
 for i in $(seq 50); do [ -p "$OUT/cmd.fifo" ] && break; sleep 0.2; done

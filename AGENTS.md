@@ -1,3 +1,23 @@
+# Development memory target
+
+- User authorization, 2026-11-03: game routines may be replaced with new algorithms and data structures when the
+  result is identical. Preserve arithmetic/wrap behavior, decisions and their order, state changes, RNG, sound,
+  inputs and MIDI determinism. Prove equivalence against the independent original program and measure the gain;
+  the original instruction sequence itself is not a constraint.
+- Graphics objective, following R-Type (user, 2026-11-03): aim for steady **25 pictures/s**. In heavy play target
+  a new displayed picture at least every **3 PAL VBLs** (50/3, about 16.7 pictures/s), as R-Type's `PIC_VBLS=3`
+  policy does. Preserve Gauntlet's 60 Hz logic rate where it fits; under overload protect the picture cadence
+  while preserving exact game-state progression and MIDI lockstep. This is a target, not a claim about the
+  current scheduler. Measure flip intervals and missed deadlines as well as separate picture/logic rates.
+- User decision, 2026-11-03: target **14 MB ST RAM** during development. Prioritize measured speed gains with
+  resident prepared graphics, generated drawing code and pre-coloured assets; reduce memory use later.
+- Plan prepared assets as indexed, relocatable blocks so a later smaller-RAM version can load them dynamically
+  from HDD. Inspect `../stedaimakaimura/dma_test.s` and the existing `engine/rt/hdd.s` before implementing transport.
+  HDD streaming is a later phase, not currently integrated into Gauntlet. Keep exact drawing fallbacks on cache
+  misses, and keep disk availability out of gameplay and MIDI lockstep state.
+- The existing low-memory map still has fixed screen buffers at $200000. Increasing the development target does
+  not authorize overlapping them: add an explicit high-memory asset layout and loader support when using more RAM.
+
 # STEArcade renderer rules
 
 These rules apply to every game port and every sprite fallback path.

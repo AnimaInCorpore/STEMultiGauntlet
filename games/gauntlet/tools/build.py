@@ -1,4 +1,6 @@
-"""Build GAUNTLET.PRG (run/gauntlet/) for a 4 MB STE, or the simulator variant (--sim: run/gauntlet_sim/).
+"""Build GAUNTLET.PRG (run/gauntlet/), or the simulator variant (--sim: run/gauntlet_sim/).
+
+Development targets 14 MB ST RAM; the current runtime and fixed buffers still fit below 4 MB.
 
     venv/bin/python games/gauntlet/tools/build.py [--sim] [-D NAME=VALUE ...]
 

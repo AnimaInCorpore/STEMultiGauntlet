@@ -34,9 +34,22 @@ against the original, and the STE's pictures are compared with a reference rende
 
 | | |
 |---|---|
-| Machine | Atari STE, 8 MHz, **4 MB**, no accelerator (the program takes the whole machine: **Esc resets** the STE) |
+| Machine | Atari STE, 8 MHz, **14 MB development target**, no accelerator (the program takes the whole machine: **Esc resets** the STE) |
 | Picture | 320 x 276, 16 colours: maze in lines 0-239, status bar in lines 240-275 |
 | Game | the arcade's own 68010 program, run natively on the 68000 and patched in place (nothing is translated) |
+
+Since 2026-11-03, development prioritizes speed with 14 MB of ST RAM: prepared drawing code and pre-coloured
+graphics can stay resident. The current runtime layout still fits below 4 MB. Memory reduction comes later,
+including possible HDD loading of prepared asset blocks, based on `stedaimakaimura/dma_test.s` and the inherited
+`engine/rt/hdd.s`. See the [R-Type comparison and development plan](games/gauntlet/docs/rtype-performance-review.md).
+The Hatari launch helpers default to 14 MB; use `MEMSIZE=4` on macOS/Linux or `-MemSize 4` in PowerShell for the
+current build's smaller-memory checks.
+
+The graphics goal follows R-Type: steady **25 pictures/s**, with a heavy-play minimum cadence of one new picture
+every **3 PAL VBLs** (about **16.7 pictures/s**). Keep Gauntlet's 60 Hz logic pace where it fits; under overload,
+protect picture cadence while preserving game-state progression and MIDI lockstep. These are development
+objectives; the current scheduler does not yet guarantee that cadence. Benchmarks must report displayed-picture
+intervals and missed deadlines alongside picture and logic rates.
 
 ## How it works
 

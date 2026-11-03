@@ -158,6 +158,17 @@ above) -> now: attract 189.2k -> 186.9k, seed 1 level 2 358.8k -> 345.7k, seed 1
 
 ### The ghost horde
 
+2026-11-03: [fresh pinned-Hatari bottleneck profile](docs/bottleneck-audit.md), unchanged executable at 14 MB.
+The densest measured horde displays 4 pictures/s with 240–340 ms flip gaps; logic completes 16.5 ticks/s.
+Sprite drawing/preparation is the largest named graphics group (24.8% of machine time); the full profile also
+separates restoration, snapshot retries, native logic and a 98-VBL scene-transition pause. No optimization is
+claimed by that measurement.
+
+2026-11-03: [comparison with STEArcade's current R-Type renderer](docs/rtype-performance-review.md),
+with fresh CPU/Blitter profiles of this port after the October 29 changes. The leading experiments are shared
+sprite-shape preparation, generated common-shape drawing and a leaner object path. All 2,450 sampled pictures
+match the reference; no runtime optimization or new Hatari speedup is claimed by that audit.
+
 2026-10-28, Hatari (the attract demo's densest horde, VBLs 2250-2750, the build with black shadows and the tile
 cache; the profiler's CPU cycles include the Blitter's stalls; every picture's VBL and tick logged by a debugger
 breakpoint on `pictures`): 70 pictures in 500 VBLs (7 a second, a new one every 9-13 VBLs, 3-5 game ticks apart:
@@ -201,7 +212,8 @@ STE port of MAME set `gauntlet` (rev 14; driver `atari/gauntlet.cpp`).  Unlike t
 the arcade's main CPU is a 68010, and its own program runs on the STE's 68000, patched in place.  The game's logic
 runs at the arcade's speed (60 frames a second: six for every five VBLs), the picture 26 times a second in Hatari in
 the attract mode's demo play, 32-37 in light play, 4-10 in a ghost horde (2026-10-28, table above); 320 of the 336 pixels and all 240 lines, the side panel as a status bar below, 16 colours; music, effects and
-speech.  Needs a 4 MB STE and the whole machine: the program takes TOS's memory, so **Esc resets** the STE (there is
+speech. Development targets **14 MB ST RAM** since 2026-11-03, with memory reduction and possible HDD asset
+streaming deferred; the current runtime layout still fits below 4 MB. The program takes TOS's memory, so **Esc resets** the STE (there is
 no return to the desktop and no CRASH.TXT; a crash turns the screen red and keeps its record at $3C1000).
 
 ```sh
