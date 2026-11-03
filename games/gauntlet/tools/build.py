@@ -1,6 +1,6 @@
 """Build GAUNTLET.PRG (run/gauntlet/), or the simulator variant (--sim: run/gauntlet_sim/).
 
-Development targets 14 MB ST RAM; the current runtime and fixed buffers still fit below 4 MB.
+Development targets 14 MB ST RAM; SPRITES.DAT is loaded at 4 MB, above the fixed low runtime and buffers.
 
     venv/bin/python games/gauntlet/tools/build.py [--sim] [-D NAME=VALUE ...]
 
@@ -13,6 +13,7 @@ import re
 import struct
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -93,6 +94,8 @@ def assemble(tag, defines):
     lobj = build / (tag + "_loader.o")
     run([VASM, "-Fvobj", "-quiet", "-nowarn=2047"] + inc + defs + ["-o", str(lobj), "loader.s"], src)
     run([VLINK, "-b", "ataritos", "-s", "-o", str(out), str(lobj)], src)
+    if "RESIDENT=0" not in defines:
+        shutil.copy2(build / "SPRITES.DAT", out.parent / "SPRITES.DAT")
     return out, end
 
 
@@ -110,6 +113,13 @@ def main():
     data_files(build)
     import assets
     assets.build()                        # (src/render.s's data: tools/assets.py)
+    if "RESIDENT=0" not in args.defines:
+        import resident_sprites
+        if not (build / "resident_inputs.json").exists():
+            resident_sprites.collect(argparse.Namespace(seed=0, level=0, frames=3600, first=400, every=3, fixtures=True))
+            resident_sprites.collect(argparse.Namespace(seed=12, level=5, frames=4000, first=400, every=3, fixtures=False))
+            resident_sprites.collect(argparse.Namespace(seed=14, level=9, frames=4000, first=400, every=3, fixtures=False))
+        resident_sprites.build(argparse.Namespace(order="mask"))
     import sound                          # build/gauntlet/sound_data.s, gauntlet_speech/_adpcm.bin (src/sound_out.s)
     sound.build(build)
     defs = list(args.defines) + (["SIM=1"] if args.sim else []) + (["NET=1"] if args.net else [])

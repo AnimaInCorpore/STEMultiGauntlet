@@ -1,5 +1,8 @@
 # Biggest bottleneck: the running game
 
+Follow-up implementation: [resident sprites and snapshot epochs](resident-sprites.md) reduce renderer work
+and improve the matched dense sample to 4.49 displayed pictures/s. The audit below records the original baseline.
+
 2026-11-03. Production code baseline `4e5a85c`, unchanged installed executable.
 Pinned Hatari `2.6.1-devel`, built 2026-10-20, STE, 14 MB ST RAM, cycle-exact and
 compatible CPU, fast-forward, TOS 2.06 DE. Sound output is disabled in Hatari;

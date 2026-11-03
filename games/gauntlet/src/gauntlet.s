@@ -17,6 +17,7 @@
 ; thread: own_stack.
 
 	include	"map.i"			; (tools/patch.py: ARC_VRAM ... RT_BASE)
+	include "cadence.s"
 
 ARC_IRQ4 = $34A				; the arcade's vector 28 (IRQ 4, the vertical blank)
 	ifnd STARVE
@@ -241,6 +242,9 @@ init_hardware:
 	bset	#0,$fffffa13.w
 	bset	#5,$fffffa07.w
 	bset	#5,$fffffa13.w
+	if PIC_VBLS
+	bsr	cadence_init
+	endc
 	ifnd SIM
 	bsr	jagpad_init		; (the STE pads: absent on a plain ST)
 	endc
@@ -351,6 +355,9 @@ vbl:
 	ifnd SIM
 	borders_vbl
 	endc
+	if PIC_VBLS
+	move.b	$fffffa25.w,cad_td_vbl
+	endc
 	ifd NET
 	tst.b	vbl_busy		; (the ring: a VBL while the last one still runs, let in by a handler that lowered
 	beq.s	.nr			;  the mask: only the borders' restart above; its own stack and vbl_sp untouched)
@@ -436,6 +443,15 @@ vbl:
 	endc
 	rte
 .ok:
+	if PIC_VBLS
+	movem.l	d0-d3/a0,-(sp)
+	bsr	cad_should_hold
+	tst.l	d0
+	movem.l	(sp)+,d0-d3/a0
+	beq.s	.cad_ok
+	rte
+.cad_ok:
+	endc
 	ifd NET
 	move.l	d0,-(sp)		; (the ring: a tick only when every machine's input for it is in)
 	bsr	net_tick_try
@@ -449,6 +465,9 @@ vbl:
 	rte
 	endc
 .go:	movem.l	d0-d7/a0-a6,-(sp)
+	if PIC_VBLS
+	bsr	cad_game_begin
+	endc
 	move.l	sp,render_sp		; the picture's thread: its registers and the VBL's frame on its stack
 	st	in_game
 	move.l	game_sp,sp
@@ -562,6 +581,10 @@ trap_queue:
 
 yield:
 	movem.l	d0-d7/a0-a6,-(sp)
+	if PIC_VBLS
+	bsr	cad_game_end
+	endc
+	addq.l	#1,game_serial		; snapshot input generation; SR is restored from the game's exception frame
 	move.l	sp,game_sp
 	sf	in_game
 	move.l	render_sp,sp
@@ -861,6 +884,7 @@ crash_common:
 	move.w	#$700,$ffff8240.w
 .halt:	bra.s	.halt
 
+	cadence_text
 	include	"render.s"
 	ifd NET
 	include	"net.s"
@@ -931,6 +955,7 @@ slapstic_banks:
 	even
 
 	section bss,bss
+	cadence_vars
 	ikbd_vars
 	borders_vars
 	sound_vars

@@ -89,6 +89,18 @@ AL_LISTS = $33A000			; 64 x 1200 words: the character positions of each alphanum
 SPR_POOL = $35F800			; the motion objects' baked images
 BIMG = $3E0800				; the status bar: BAR_LINES lines x 160 bytes
 SPR_POOL_END = $3C0000
+	ifnd PIC_VBLS
+PIC_VBLS = 0				; render-only harness: no interrupts or scheduler
+	endc
+	ifnd SNAP_EPOCH
+SNAP_EPOCH = 1
+	endc
+	ifnd RESIDENT
+RESIDENT = 1
+	endc
+	if RESIDENT
+	include "resident.i"
+	endc
 AL = 160				; AIMG's bytes a line
 AL_N = 1200				; (30 rows x 40 characters)
 
@@ -155,6 +167,23 @@ BLT_SKEW = $ffff8a3d
 
 ; ---------------------------------------------------------------------------------------------------------------------
 init_video:
+	clr.l	game_serial
+	if RESIDENT
+	clr.l	rs_base
+	clr.l	rs_hits
+	clr.l	rs_misses
+	clr.l	rs_draws
+	if MO_BLACKSH
+	cmp.l	#'RS14',RS_BASE
+	bne.s	.nores
+	cmp.l	#RS_BYTES,RS_BASE+4
+	bne.s	.nores
+	cmp.l	#RS_SIGNATURE,RS_BASE+24
+	bne.s	.nores
+	move.l	#RS_BASE,rs_base
+.nores:
+	endc
+	endc
 	lea	scene_cols,a0		; scene 0 (the general palette)
 	lea	shown_pal,a1
 	lea	flip_pal,a2
@@ -423,6 +452,9 @@ vbl_video:
 	addq.l	#1,rf_vbls
 	tst.b	frame_ready
 	beq	.done
+	if PIC_VBLS
+	bsr	cad_flip
+	endc
 	clr.b	frame_ready
 	move.l	flip_addr,bd_vs_pf
 	moveq	#0,d0
@@ -508,6 +540,9 @@ render_frame:
 .wait:	tst.b	frame_ready		; (the ring drawn last must be shown before the other one is drawn again)
 	bne	.wait
 	endc
+	if PIC_VBLS
+	bsr	cad_picture_begin
+	endc
 	eor.w	#1,ring_index
 	lea	ring_state0,a0
 	move.l	#RING0,d0
@@ -517,11 +552,15 @@ render_frame:
 	move.l	#RING1,d0
 .r0:	move.l	a0,cur_ring
 	move.l	d0,work_base
-	; what the picture is of: the scroll and the motion objects, between two VBLs (the game changes them only in its
-	; frame, which runs from the VBL): taken again when a VBL came meanwhile (twice at most; the VBL is not held
-	; back: its border timers start from it)
+	; Retry only when game work actually returned to the renderer during the snapshot. A display-only VBL
+	; (the game held for a picture) does not change its inputs. Queue yields count too, unlike frames_done.
 	move.w	#3-1,snap_tries
-.snap:	move.l	rf_vbls,snap_vbls
+.snap:
+	if SNAP_EPOCH
+	move.l	game_serial,snap_vbls
+	else
+	move.l	rf_vbls,snap_vbls
+	endc
 	move.w	ARC_XSCROLL,d0
 	move.w	ARC_VRAM+$5F6E,d1
 	move.w	d0,snap_xs
@@ -539,7 +578,11 @@ render_frame:
 	beq.s	.kept
 	bsr	mo_ram_copy
 .kept:	move.l	snap_vbls,d7
+	if SNAP_EPOCH
+	cmp.l	game_serial,d7
+	else
 	cmp.l	rf_vbls,d7
+	endc
 	beq	.snapped
 	subq.w	#1,snap_tries
 	bpl	.snap
@@ -720,6 +763,9 @@ ring_target:
 	rts
 
 render_done:
+	if PIC_VBLS
+	bsr	cad_picture_end
+	endc
 	; the display: from the window's first word, PIC_TOP lines above the picture (SIM: the picture's line 0)
 	move.l	cur_ring,a0
 	move.w	w0,RS_W0(a0)
@@ -4703,7 +4749,25 @@ mo_image:
 	lsl.w	#4,d4
 	lea	MO_HASH,a0
 	add.w	d4,a0
-.empty:	; room in the pool?  (an image: 8 + 8 rows + 8 sw rows bytes at most: 8 + 8 * 64 + 16 * 64)
+.empty:
+	if RESIDENT
+	if MO_BLACKSH
+	if MO_PREP
+	ifnd MO_ORDER
+	bsr	rs_find			; exact shape and checker-colouring match; keeps the cache key and slot
+	move.l	a1,d4
+	beq.s	.dynamic
+	move.l	d2,(a0)
+	move.l	d3,4(a0)
+	move.l	a1,8(a0)
+	move.l	a1,a0
+	rts
+.dynamic:
+	endc
+	endc
+	endc
+	endc
+	; room in the pool?  (an image: 8 + 8 rows + 8 sw rows bytes at most: 8 + 8 * 64 + 16 * 64)
 	move.l	mo_pool,d4
 	add.l	#IMG_HDR+8*64+16*64,d4
 	cmp.l	#SPR_POOL_END,d4
@@ -4730,6 +4794,95 @@ mo_flush:
 	dbf	d0,.c
 	move.l	#SPR_POOL,mo_pool
 	rts
+
+	if RESIDENT
+; Resident directory: 32-byte slots, key.l, checker map[16], image offset.l, padding.
+; Every pointer in the pack is relative to RS_BASE. Unknown keys keep the ordinary bake path.
+rs_find:
+	sub.l	a1,a1
+	tst.l	rs_base
+	beq	.out
+	movem.l	d0-d3/d5-d7/a0/a2-a5,-(sp)
+	moveq	#0,d2
+	move.w	MR_CODE(a6),d2
+	and.l	#$7fff,d2
+	eor.w	#$800,d2
+	moveq	#0,d3
+	move.w	MR_W2(a6),d3
+	and.w	#$7f,d3
+	swap	d3
+	or.l	d3,d2
+	tst.w	ob_strip
+	beq.s	.s0
+	bset	#23,d2
+.s0:	move.w	ob_pal,d0
+	lsl.w	#4,d0
+	lea	pen_pab+256,a2
+	add.w	d0,a2
+	move.l	d2,d7
+	lsr.l	#8,d7
+	eor.l	d2,d7
+	move.l	(a2),d0
+	eor.l	d0,d7
+	and.l	#RS_CAP_MASK,d7
+	move.l	#RS_CAP_MASK,d6
+.slot:	move.l	d7,d0
+	lsl.l	#5,d0
+	move.l	rs_base,a3
+	lea	32(a3),a3
+	add.l	d0,a3
+	cmp.l	#-1,(a3)
+	beq.s	.miss
+	cmp.l	(a3),d2
+	bne.s	.next
+	move.l	a2,a4
+	lea	4(a3),a5
+	rept	4
+	cmpm.l	(a4)+,(a5)+
+	bne.s	.next
+	endr
+	move.l	20(a3),a1
+	add.l	rs_base,a1
+	addq.l	#1,rs_hits
+	bra.s	.done
+.next:	addq.l	#1,d7
+	and.l	#RS_CAP_MASK,d7
+	subq.l	#1,d6
+	bpl.s	.slot
+.miss:	addq.l	#1,rs_misses
+.done:	movem.l	(sp)+,d0-d3/d5-d7/a0/a2-a5
+.out:	rts
+
+; A full strip: generated short copy passes, aligned source pieces in pass order.
+; Whole destination addresses keep 64 KB crossings exact. The caller owns the saved record a6.
+rs_draw:
+	addq.l	#1,rs_draws
+	move.w	ob_s,d0
+	lsl.w	#2,d0
+	move.l	8(a0,d0.w),a1
+	adda.l	#RS_BASE,a1
+	move.l	(a1),d0
+	add.l	#RS_BASE,d0
+	move.l	d0,-(sp)
+	move.l	8(a1),d0
+	add.l	#RS_BASE,d0
+	move.l	d0,BLT_SRC.w
+	move.l	4(a1),a0
+	adda.l	#RS_BASE,a0
+	move.w	#2,BLT_SXI.w
+	move.w	#2,BLT_SYI.w
+	move.w	#8,BLT_DXI.w
+	move.w	#$0203,BLT_HOP.w
+	move.l	ob_dest,a3
+	lea	BLT_E1.w,a1
+	lea	BLT_CTRL.w,a2
+	lea	BLT_DST.w,a4
+	lea	BLT_YC.w,a5
+	lea	BLT_E3.w,a6
+	moveq	#4,d1
+	moveq	#-$40,d2
+	rts				; into the generated routine, then back to mo_object
+	endc
 
 ; mo_bake: record a6's strip into a0: rows.w, sw.w (source words a row: 1 or 2), tw.w, -; the rows' opaque masks
 ; (longs: pixels not 0 or 1, the first pixel bit 31), their shadow masks (pixels 1); the opaque rows' plane words
@@ -5454,6 +5607,10 @@ mo_strip_draw:
 	bne	.noprep
 	cmp.w	#STRIDE,tg_stride
 	bne	.noprep
+	if RESIDENT
+	cmp.w	#RS_TAG,6(a0)
+	beq	rs_draw
+	endc
 	move.w	ob_s,d0
 	lsl.w	#2,d0
 	move.l	8(a0,d0.w),a1
@@ -6072,7 +6229,14 @@ black_pal:	ds.w	16
 cur_ring:	ds.l	1
 rf_vbls:	ds.l	1
 snap_vbls:	ds.l	1
+game_serial:	ds.l	1		; all game-to-renderer yields, including queue work; not just completed ticks
 mo_pool:	ds.l	1
+	if RESIDENT
+rs_base:	ds.l	1
+rs_hits:	ds.l	1
+rs_misses:	ds.l	1
+rs_draws:	ds.l	1
+	endc
 ob_dest:	ds.l	1
 sb_src:		ds.l	1
 sb_dst:		ds.l	1

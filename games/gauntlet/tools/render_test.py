@@ -83,6 +83,11 @@ def build_harness(defines=()):
     write_map(build)
     if not (build / "palette.bin").exists() or not (build / "sprite_code.s").exists():
         assets.build()
+    if "RESIDENT=0" not in defines and not all((build / n).exists() for n in ("resident.i", "SPRITES.DAT")):
+        import resident_sprites
+        if not (build / "resident_inputs.json").exists():
+            resident_sprites.collect(argparse.Namespace(seed=0, level=0, frames=3600, first=400, every=3, fixtures=True))
+        resident_sprites.build(argparse.Namespace(order="mask"))
     src = src_dir("gauntlet")
     inc = ["-I", str(build), "-I", str(RT_INCLUDE)]
     obj = build / "render_test.o"
@@ -105,10 +110,14 @@ class Harness:
         self.TRAP1 = TRAP1
         build = build_dir("gauntlet")
         self.sim = Sim(str(prg), ram_kib=16384, run_dir=build)
+        # The production loader reads this before takeover; the render-only harness starts after that step.
+        if (build / "SPRITES.DAT").exists():
+            self.sim.mem.w_block(0x400000, (build / "SPRITES.DAT").read_bytes())
         self.sym = {k: v + self.sim.base for k, v in self.sim.symbols(build / "render_test.map").items()}
         self.map = arc_map()
         self.stops = {self.sym[n]: n for n in ["sim_wait", "sim_render_ret"]}
         self.profile = profile
+        self.observer = None             # optional build-time asset collector, called before each instruction
         import collections
         self.prof = collections.Counter()
         import re
@@ -122,11 +131,15 @@ class Harness:
         sim, cpu = self.sim, self.sim.cpu
         used = 0
         while used < 2_000_000_000:
-            if self.profile:
+            if self.profile or self.observer:
                 pc = cpu.r_pc()
+                if self.observer:
+                    self.observer(pc)
                 r = cpu.execute(1)
                 c = r.cycles + sim.blitter.cycles
-                self.prof[self.plabs[self.bisect.bisect_right(self.paddr, pc) - 1][1]] += c
+                if self.profile:
+                    label = "rs_generated" if 0x400000 <= pc < 0xD00000 else self.plabs[self.bisect.bisect_right(self.paddr, pc) - 1][1]
+                    self.prof[label] += c
             else:
                 r = cpu.execute(4000)
                 c = r.cycles + sim.blitter.cycles
@@ -201,6 +214,9 @@ class Harness:
         import bar
         return ring_pixels(bytes(self.sim.mem.r_block(BIMG, bar.BAR_LINES * 160)), bar.BAR_LINES, 20, 160)
 
+    def resident_counts(self):
+        return {n: self.sim.mem.r32(self.sym[n]) for n in ("rs_base", "rs_hits", "rs_misses", "rs_draws") if n in self.sym}
+
 
 def ring_pixels(data, lines, words, stride=STRIDE):
     """interleaved 4-plane lines (stride bytes) -> [lines, words * 16] colour indices"""
@@ -227,6 +243,8 @@ def main():
     ap.add_argument("--save", default=None)
     ap.add_argument("--profile", action="store_true", help="68000 + Blitter cycles per routine (the pictures drawn)")
     ap.add_argument("--nobuild", action="store_true")
+    ap.add_argument("--require-resident", action="store_true", help="fail unless generated resident drawing executes")
+    ap.add_argument("--force-resident-miss", action="store_true", help="empty the private directory to verify exact dynamic fallbacks")
     ap.add_argument("--nomo", action="store_true", help="the motion objects left out (both pictures)")
     ap.add_argument("-D", dest="defines", action="append", default=[])
     args = ap.parse_args()
@@ -234,6 +252,10 @@ def main():
     import assets
     prg = build_dir("gauntlet") / "render_test.prg" if args.nobuild else build_harness(args.defines)
     h = Harness(prg, args.profile)
+    if args.force_resident_miss:
+        cap = h.sim.mem.r32(0x400008)
+        assert 0 < cap <= 65536, "no resident pack loaded"
+        h.sim.mem.w_block(0x400020, bytes([255]) * (32 * cap))
     oracle = assets.Oracle()
     save = Path(args.save) if args.save else None
     if save:
@@ -277,7 +299,11 @@ def main():
         print("cycles a picture: median %.0f, 90%% %.0f" % (np.median(cyc), np.percentile(cyc, 90)))
     print("seed %d level %d: %d pictures compared, %d differ; 68000 + Blitter cycles a picture (Musashi): mean %.0f, "
           "max %d" % (args.seed, args.level, checked, bad, np.mean(cyc) if cyc else 0, max(cyc) if cyc else 0))
-    return int(bad != 0)
+    resident = h.resident_counts()
+    if resident:
+        print("resident:", resident)
+    fallback_bad = args.force_resident_miss and (resident.get("rs_draws", 0) != 0 or not resident.get("rs_misses", 0))
+    return int(bad != 0 or (args.require_resident and not resident.get("rs_draws", 0)) or fallback_bad)
 
 
 if __name__ == "__main__":

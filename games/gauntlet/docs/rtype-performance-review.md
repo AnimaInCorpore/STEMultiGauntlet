@@ -1,5 +1,8 @@
 # What Gauntlet can learn from R-Type
 
+Implemented follow-up: [resident sprite programs and snapshot epochs](resident-sprites.md).
+The investigation below records the baseline before those changes.
+
 2026-11-03. Gauntlet baseline `4e5a85c`; sibling STEArcade checkout `140c09a`.
 This is an investigation, with a new executable renderer audit. No game runtime,
 rendering policy, scheduler or installed executable was changed. No optimization

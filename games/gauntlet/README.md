@@ -3,6 +3,13 @@
 STEMultiGauntlet (named STEGauntlet until 2026-10-28): the arcade's Gauntlet on the STE, aimed at fast play and, later, networked play over the MIDI ports
 (MIDI-Maze style: every player on a screen of their own).  Imported from STEArcade (commit 0ba04dc) on 2026-10-26.
 
+2026-11-03: the 14 MB development build adds resident sprite programs and pre-coloured images, loaded from
+`SPRITES.DAT` next to the program. Fixed-workload renderer cycles fall 13.75%; matched heavy states in pinned
+Hatari improve from 4.0 to 4.49 displayed pictures/s (logic 16.5 to 18.54 ticks/s). This remains below the
+16.7 pictures/s heavy-play target. Snapshot retries now track game yields. The deadline scheduler prototype
+remains optional. See [implementation, measurements and limitations](docs/resident-sprites.md); the older
+measurements below describe their dated builds.
+
 2026-10-26 (STEMultiGauntlet): the picture uses the whole screen.  The borders are open at the top and the bottom
 (stefastbobs2's screen, 276 lines): the maze over the full width, the arcade's x 0-319, in lines 0-239, hardware
 scrolled as before; the side panel is gone from the picture and its cells (scores, health, inventory, names, level)

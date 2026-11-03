@@ -23,6 +23,8 @@ for ($k = 0; $k -lt $Count; $k++) {
     $dir = Join-Path $root "run\midiring\$k"
     New-Item -ItemType Directory -Force $dir | Out-Null
     Copy-Item $src $dir -Force
+    $sprites = Join-Path (Split-Path $src -Parent) "SPRITES.DAT"
+    if (Test-Path $sprites) { Copy-Item $sprites $dir -Force }
     Remove-Item "$dir\NETMASTR.CFG" -ErrorAction SilentlyContinue
     if ($k -eq 0 -and -not $NoMaster) { Set-Content "$dir\NETMASTR.CFG" "master" }
     $in = $Port + $k

@@ -59,6 +59,7 @@ def put_objects(vram, objs, xs, ys, slips=None, links=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nobuild", action="store_true")
+    ap.add_argument("--require-resident", action="store_true")
     ap.add_argument("--save", default=None)
     ap.add_argument("-D", dest="defines", action="append", default=[])
     args = ap.parse_args()
@@ -166,7 +167,10 @@ def main():
         check("64k", objs, (xs0 + i) & 511, ys)
     print("%d pictures compared, %d differ; rows across a 64 KB boundary: %d objects" % (
         state["n"], state["bad"], state["crossed"]))
-    return int(state["bad"] != 0 or state["crossed"] == 0)
+    resident = h.resident_counts()
+    if resident:
+        print("resident:", resident)
+    return int(state["bad"] != 0 or state["crossed"] == 0 or (args.require_resident and not resident.get("rs_draws", 0)))
 
 
 if __name__ == "__main__":

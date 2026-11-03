@@ -211,6 +211,9 @@ class Sim:
         self.frames = 0
         self.log = []
         self.load_prg(prg)
+        # TOS phystop: resident-asset loaders check usable ST RAM before takeover.
+        # A 16 MB simulator address space also includes the STE's upper I/O area.
+        self.mem.w32(0x42E, min(ram_kib, 14 * 1024) * 1024)
 
     # ---- hardware ------------------------------------------------------
     def on_access(self, mode, width, addr, value):

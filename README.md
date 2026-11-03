@@ -23,11 +23,10 @@ against the original, and the STE's pictures are compared with a reference rende
   88 pixels. Players can walk across the whole picture, monsters stay alive there, generators and magic act on
   everything shown, and the camera centres the players in 320 pixels. The attract mode keeps the arcade's own bounds
   and camera, so its recorded demo plays as on the arcade (the 96 extra pixels shown on the left).
-- **Speed:** the game logic runs at the arcade's 60 frames a second. Pictures (Hatari, the attract demo,
-  2026-10-28): 31-37 a second in light play, about 26 over the whole demo, 11-12 in a large ghost horde (about 5
-  in its densest part, where the game's own logic also slows to a third). Objects' shadows are baked in as black
-  (`MO_BLACKSH`), and floor tiles are cached in screen format, which shortens the pauses at camera cuts and level
-  starts. Where the horde's time goes, and what could still be done: `games/gauntlet/README.md`, "The ghost horde".
+- **Speed:** 60 logic ticks/s where the workload fits; dense hordes slow both graphics and logic. The 2026-11-03
+  resident sprite programs reduce fixed-workload renderer cost by 13.75%. In matched heavy game states, pinned
+  Hatari improves from 4.0 to 4.49 displayed pictures/s and 16.5 to 18.54 logic ticks/s. The heavy-play graphics
+  target remains unmet. See [measurements and checks](games/gauntlet/docs/resident-sprites.md).
 - **Networking:** a separate program for up to four STEs in a MIDI ring (`build.py --net`, see
   [Networked play](#networked-play-a-midi-ring)): every machine runs the whole game in lockstep, one player each,
   all on the arcade's shared screen. Tested with four Hatari instances over emulated MIDI cables.
@@ -39,11 +38,12 @@ against the original, and the STE's pictures are compared with a reference rende
 | Game | the arcade's own 68010 program, run natively on the 68000 and patched in place (nothing is translated) |
 
 Since 2026-11-03, development prioritizes speed with 14 MB of ST RAM: prepared drawing code and pre-coloured
-graphics can stay resident. The current runtime layout still fits below 4 MB. Memory reduction comes later,
+graphics can stay resident. `SPRITES.DAT` currently occupies about 1.61 MB at `$400000`; the low runtime and fixed
+screen buffers retain their addresses. Memory reduction comes later,
 including possible HDD loading of prepared asset blocks, based on `stedaimakaimura/dma_test.s` and the inherited
 `engine/rt/hdd.s`. See the [R-Type comparison and development plan](games/gauntlet/docs/rtype-performance-review.md).
-The Hatari launch helpers default to 14 MB; use `MEMSIZE=4` on macOS/Linux or `-MemSize 4` in PowerShell for the
-current build's smaller-memory checks.
+The Hatari launch helpers default to 14 MB. For smaller-memory control checks, build with `-D RESIDENT=0` before
+using `MEMSIZE=4` on macOS/Linux or `-MemSize 4` in PowerShell.
 
 The graphics goal follows R-Type: steady **25 pictures/s**, with a heavy-play minimum cadence of one new picture
 every **3 PAL VBLs** (about **16.7 pictures/s**). Keep Gauntlet's 60 Hz logic pace where it fits; under overload,
@@ -68,8 +68,8 @@ the bar is empty.
 
 The ROM set is not part of the repository. Put MAME's `gauntlet` set (rev 14, MAME's file names) at
 `assets/gauntlet.zip`; [games/gauntlet/docs/rom_manifest.json](games/gauntlet/docs/rom_manifest.json) lists the 20
-files with their checksums. The build verifies the archive, unpacks it to `assets/extracted/` and embeds everything
-in the program: no ROM files are needed at run time.
+files with their checksums. The build verifies the archive and unpacks it to `assets/extracted/`. Run-time assets
+are embedded in the program and its generated `SPRITES.DAT`; the ROM archive is not needed at run time.
 
 Needed:
 
@@ -82,8 +82,12 @@ Needed:
 venv/bin/python games/gauntlet/tools/build.py
 ```
 
-That writes `run/gauntlet/GAUNTLET.PRG`. Options: `--sim` builds the variant the simulator tests use;
+That writes `run/gauntlet/GAUNTLET.PRG` and `SPRITES.DAT`; keep both files together. The first build also collects
+and checks a resident sprite working set. Options: `--sim` builds the variant the simulator tests use;
 `-D SHOWFPS=1` shows the picture rate of the last second in the middle of the status bar.
+`-D RESIDENT=0` selects the original standalone sprite path. The optional `-D PIC_VBLS=3` scheduling experiment
+is disabled by default; it improves dense-scene picture rate at a significant logic-speed cost and has not had
+a new live MIDI verification.
 
 The patcher starts from coverage data of the original program in `build/gauntlet/` (`cover_*.pkl`). If it is
 missing, make it first (about 10 minutes):

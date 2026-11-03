@@ -91,7 +91,7 @@ class Audit(RT.Harness):
                     self.phase = self.phase_entries[pc]
                 if pc in self.entry_names:
                     self.calls[self.entry_names[pc]] += 1
-            label = self.plabs[self.bisect.bisect_right(self.paddr, pc) - 1][1]
+            label = "rs_generated" if 0x400000 <= pc < 0xD00000 else self.plabs[self.bisect.bisect_right(self.paddr, pc) - 1][1]
             r = cpu.execute(1)
             bus = sim.blitter.cycles
             self.cpu_cost[self.phase] += r.cycles
