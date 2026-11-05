@@ -17,14 +17,14 @@
     bar_map.bin      the status bar's cells (tools/bar.py): their word in the alphanumerics, their byte in the bar
     bar.i            BAR_N (the cells), BAR_LINES
     ir4.bin          256 bytes: [I << 4 | C] = the 4-bit channel of an IRGB pen's intensity I and channel C
-    scene_cols.bin   SCENE_N x 16 STE words: every scene the port's palette (docs/palette_db15.json: DawnBringer 16
-                     without its brown, colour 15 kept free: the title band, a glow), mapped in Oklab with the
-                     lightness x 0.5; the title's fitted palette kept beside it (TITLE_SCENES).  GAUNTLET_PALETTE=scenes: the fitted scene palettes instead (docs/scenes.json,
-                     ref/scene_palettes.py)
+    scene_cols.bin   SCENE_N x 16 STE words: bounded source-RGB fit (colour_training.json), 15 colours including
+                     black and the four player anchors; colour 15 reserved for the band/glow. The title retains
+                     its fitted palette. GAUNTLET_PALETTE=db15|scenes restores the earlier palette policies.
     scene_idx.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> the nearest of the palette's 16 in Oklab
     scene_err.bin    SCENE_N x 4096 bytes: that distance (Oklab x 400, at most 255): render.s scene_pick's score
     scene_pab.bin    SCENE_N x 4096 bytes: an RGB_444 colour -> a << 4 | b, the checker pair for the maze and the
-                     objects (checker_pairs; GAUNTLET_DITHER = its contrast weight, 0.25; 0: no checker)
+                     objects (constrained checker pairs; GAUNTLET_DITHER=0: flat colours). Legacy policies and
+                     the preserved title use checker_pairs (contrast weight 0.25).
     scenes.i         SCENE_N
     ir4s.bin         256 bytes: ir4 as STE nibbles (the title logo's band colours, render.s band_build)
     scene_panel.bin  SCENE_N bytes: 1 when the palette was fitted to scenes with the side panel up (play), else 0;
@@ -34,6 +34,7 @@
     bar_sp.bin       8 x 16 longs: [x][c] the plane bits of colour c at pixel x of a byte (plane k in byte k: movep)
 """
 from pathlib import Path
+import hashlib
 import json
 import os
 import sys
@@ -45,6 +46,20 @@ sys.path[:0] = [str(HERE), str(HERE.parents[2] / "engine")]
 from paths import build_dir
 
 DOCS = HERE.parent / "docs"
+
+
+def policy_signature():
+    """Include fitter, training, legacy palettes and user build options in asset freshness."""
+    files = [Path(__file__), HERE.parents[2] / "engine" / "palette_quantize.py",
+             HERE.parents[2] / "engine" / "palette_quantize.js"]
+    files += [DOCS / n for n in ("colour_training.json", "palette.json", "palette_db15.json", "scenes.json")]
+    options = [os.environ.get("GAUNTLET_PALETTE", "bounded"), os.environ.get("GAUNTLET_DITHER", "0.25")]
+    return hashlib.sha256(b"".join(p.read_bytes() for p in files) + json.dumps(options).encode()).hexdigest()
+
+
+def current():
+    stamp = build_dir("gauntlet") / "colour_policy.sha256"
+    return stamp.exists() and stamp.read_text().strip() == policy_signature()
 
 
 def oklab(c):
@@ -126,13 +141,39 @@ def checker_pairs(lab, pal, weight, n, near, lam):
 TITLE_SCENES = {1}
 
 
+def fitted_palette(grid):
+    """Fit original sampled RGB, then map the renderer's RGB444 grid at build time.
+
+    Keep the existing IRGB -> RGB444 runtime decoding, freeze rules, cache epochs
+    and checker phase. The sixteenth slot belongs to the raster band/red pulse.
+    """
+    from collections import Counter
+    import palette_quantize as pq
+    doc = json.loads((DOCS / "colour_training.json").read_text())
+    layers = [Counter({tuple(c): n for c, n in h}) for h in doc["histograms"]]
+    pal, _ = pq.fit(layers, grid, count=15, fixed=doc["fixed"],
+                        cache=build_dir("gauntlet") / "palette_cache")
+    # Retain Gauntlet's hue preference (L x .5): ordinary grey text and skeleton
+    # shades must not turn flesh-coloured just because their lightness is closer.
+    near = pq.flat_map(pal, grid, hue_weight=2)
+    pairs = pq.map_palette(pal, grid, hue_weight=2,
+                           dither=float(os.environ.get("GAUNTLET_DITHER", "0.25")) > 0)
+    delta = pq.oklab(grid)[:, None] - pq.oklab(pal)[None]
+    delta[:, :, 0] *= .5
+    error = np.minimum(255, np.round(np.sqrt((delta ** 2).sum(2).min(1)) * 400)).astype(np.uint8)
+    return np.vstack((pal, [0, 0, 0])), near, error, pairs
+
+
 def scene_tables(dest):
     pals = scene_palettes()
     doc = json.loads((DOCS / "scenes.json").read_text())
     panel = [bool(p.get("panel")) for p in doc["palettes"] if p["samples"]]
     grid = np.array([[r, g, b] for r in range(16) for g in range(16) for b in range(16)]) * 17
     lab = oklab(grid)
-    target = os.environ.get("GAUNTLET_PALETTE", "db15") == "db15"
+    policy = os.environ.get("GAUNTLET_PALETTE", "bounded")
+    if policy not in ("bounded", "db15", "scenes"):
+        raise ValueError("GAUNTLET_PALETTE must be bounded, db15 or scenes")
+    target = policy != "scenes"
     weight = np.ones(3)
     if target:                                  # the port's palette in every scene (colour 15 free: band / glow)
         db = json.loads((DOCS / "palette_db15.json").read_text())["colours"]
@@ -140,8 +181,16 @@ def scene_tables(dest):
         pals = [p if k in TITLE_SCENES else pal for k, p in enumerate(pals)]
         weight = np.array([0.5, 1, 1])          # (hue shifts cost more than shading shifts)
     lam = float(os.environ.get("GAUNTLET_DITHER", "0.25"))                   # (0: no checker)
+    fitted = fitted_palette(grid) if policy == "bounded" else None
     cols, idx, err, pab = bytearray(), bytearray(), bytearray(), bytearray()
-    for pal, up in zip(pals, panel):
+    for k, (pal, up) in enumerate(zip(pals, panel)):
+        if fitted is not None and k not in TITLE_SCENES:
+            pal, near, error, pairs = fitted
+            idx += near.tobytes()
+            err += error.tobytes()
+            pab += pairs.tobytes()
+            cols += np.array([ste_word(c) for c in pal], ">u2").tobytes()
+            continue
         d = np.sqrt((((lab[:, None] - oklab(pal)[None]) * weight) ** 2).sum(2))
         if not up or target:
             d[:, 15] = np.inf                                               # (the title logo's band: render.s BAND_COL)
@@ -206,6 +255,7 @@ def build():
     import bar
     (dest / "bar_map.bin").write_bytes(bar.table())
     (dest / "bar.i").write_text("BAR_N = %d\nBAR_LINES = %d\n" % (len(bar.cells()), bar.BAR_LINES))
+    (dest / "colour_policy.sha256").write_text(policy_signature() + "\n")
     print("renderer assets: %s" % dest, flush=True)
 
 

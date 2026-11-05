@@ -344,7 +344,17 @@ over the playfield and the bar is empty.
   two pictures, so with the panel down any large change is taken the same way (a new page); in play a large change
   freezes the colours until it has stayed 2 pictures, then is taken whole (no staged fade-in, a short flash left
   out).  When the panel goes up or down the palette of the other kind is chosen in that picture (`view_check`).
-* **Palette (the default since 2026-10-26)**: `docs/palette_db15.json`, DawnBringer 16 on the STE grid without its
+* **Palette (the default since 2026-11-05)**: STEArcade's shared `engine/palette_quantize.py` / `.js`, fitted at build
+  time to original arcade RGB in `docs/colour_training.json`. Sprite and tile counts are compressed separately
+  (power 0.75), sprites weighted 8x afterwards, and the chroma preference bounded below 2x; RGB saturation is
+  unchanged. Fifteen ordinary colours include true black, exact red/blue/yellow/green player anchors, and sampled
+  identity colours for the elf's dark-green cloak, neutral sprite grey and orange walls. Slot 15
+  remains reserved for the title band and gameplay pulse. The title's earlier palette and mapping and the separate
+  status-bar palette are preserved. Runtime IRGB-to-RGB444 decoding, colour freezes, text's pen-2 fix and scene
+  selection are unchanged. The lookup retains Gauntlet's hue preference (lightness x 0.5), preventing neutral
+  shades from taking flesh tones of similar brightness. Training is sampled play, not whole-game colour coverage. See
+  [palette adaptation](docs/palette-adaptation.md) for validation and the retained alternatives.
+* **Earlier DB15 palette** (`GAUNTLET_PALETTE=db15`): `docs/palette_db15.json`, DawnBringer 16 on the STE grid without its
   brown (15 colours, colour 0 the near-black $112) plus colour 15 kept free (the title logo's band; a colour-cycled
   glow later).  Since 2026-10-28 its cyan (the rarest colour in play) is a neutral dark grey #333344: the floor's
   dark greys had only #111122 and #554455, a checker of the two between them (twice the arcade's contrast, a rough,
@@ -355,7 +365,10 @@ over the playfield and the bar is empty.
   recognisable.  `tools/assets.py` gives every scene this palette (the scene machinery stays, its choice no longer
   matters), mapped in Oklab with the lightness scaled by 0.5; the status bar keeps its own palette.
   `GAUNTLET_PALETTE=scenes python games/gauntlet/tools/build.py`: the fitted scene palettes again.
-* **Checker dither** (the maze and the objects, not the text): a pen may show as a checker of two palette colours
+* **Checker dither** (the maze and the objects, not the text): the new default uses a pair only when its OKLab
+  lightness difference is at most 0.12, chroma-plane distance at most 0.08, and its linear-light mix improves
+  the flat match by more than 0.012. `GAUNTLET_DITHER=0` disables it without refitting the default palette.
+  The preserved title and legacy modes use the earlier rule: a pen may show as a checker of two palette colours
   (`tools/assets.py` checker_pairs: the pair whose mix in linear light, as a CRT blends neighbouring pixels, matches
   its colour best, the pair's own contrast x 0.25 added so that only close colours mix; `GAUNTLET_DITHER=0` turns it
   off, a smaller weight mixes more).  render.s keeps each pen's pair (pen_pab: a << 4 | b; the text's a == b) and a

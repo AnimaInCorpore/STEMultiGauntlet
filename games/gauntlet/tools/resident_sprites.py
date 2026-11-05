@@ -34,6 +34,30 @@ TAG = 0x5253
 BUILD = build_dir("gauntlet")
 
 
+def colour_signature():
+    """Images contain palette indices: recollect when their conversion tables change."""
+    names = ("scene_pab.bin", "scene_idx.bin", "scene_cols.bin", "scene_panel.bin", "ir4.bin", "tile_px.bin")
+    return hashlib.sha256(b"".join((BUILD / n).read_bytes() for n in names)).hexdigest()
+
+
+def ensure():
+    """Keep both the recorded colour maps and the installed pack current on normal builds."""
+    path = BUILD / "resident_inputs.json"
+    doc = json.loads(path.read_text()) if path.exists() else {}
+    report = BUILD / "resident_report.json"
+    info = json.loads(report.read_text()) if report.exists() else {}
+    # A failed recollection can leave a partial input file. Only a completed pack
+    # with this signature proves the default scenarios finished collecting.
+    if doc.get("colour_signature") != colour_signature() or info.get("colour_signature") != colour_signature():
+        print("resident colours changed: recollecting checked images", flush=True)
+        collect(argparse.Namespace(seed=0, level=0, frames=3600, first=400, every=3, fixtures=True))
+        collect(argparse.Namespace(seed=12, level=5, frames=4000, first=400, every=3, fixtures=False))
+        collect(argparse.Namespace(seed=14, level=9, frames=4000, first=400, every=3, fixtures=False))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if info.get("inputs_sha256") != digest or not all((BUILD / n).exists() for n in ("resident.i", "SPRITES.DAT")):
+        build(argparse.Namespace(order="mask"))
+
+
 class Collector:
     def __init__(self, entries):
         self.entries = entries
@@ -82,7 +106,9 @@ class Collector:
 
 def collect(args):
     path = BUILD / "resident_inputs.json"
-    entries = json.loads(path.read_text())["entries"] if path.exists() else {}
+    signature = colour_signature()
+    doc = json.loads(path.read_text()) if path.exists() else {}
+    entries = doc.get("entries", {}) if doc.get("colour_signature") == signature else {}
     collector = Collector(entries)
     prg = RT.build_harness(["RESIDENT=0"])
     RT.reference_mode([])
@@ -121,7 +147,7 @@ def collect(args):
             assert sprite_test.main() == 0
         finally:
             RT.Harness, sys.argv = original, argv
-    path.write_text(json.dumps(dict(entries=entries), separators=(",", ":")) + "\n")
+    path.write_text(json.dumps(dict(colour_signature=signature, entries=entries), separators=(",", ":")) + "\n")
     print("%d draws collected; %d pairs, %s" % (collector.draws, len(entries), path), flush=True)
 
 
@@ -226,7 +252,10 @@ def hash_slot(key, mapping, cap):
 
 def build(args):
     inputs = BUILD / "resident_inputs.json"
-    entries = list(json.loads(inputs.read_text())["entries"].values())
+    doc = json.loads(inputs.read_text())
+    if doc.get("colour_signature") != colour_signature():
+        raise ValueError("resident colours are stale; collect current images before building")
+    entries = list(doc["entries"].values())
     entries.sort(key=lambda e: (e["key"], e["mapping"]))
     cap = 256
     while cap < 2 * len(entries):
@@ -299,6 +328,7 @@ def build(args):
         "RS_BASE = $%x\nRS_BYTES = %d\nRS_CAP_MASK = %d\nRS_SIGNATURE = $%08x\nRS_TAG = $%x\n" %
         (BASE, len(pack), cap - 1, signature, TAG))
     summary = dict(order=args.order, pairs=len(assets), shapes=len(shapes), routines=len(routines),
+                   inputs_sha256=hashlib.sha256(inputs.read_bytes()).hexdigest(), colour_signature=colour_signature(),
                    code_bytes=(BUILD / "resident_code.bin").stat().st_size, pack_bytes=len(pack),
                    cap=cap, max_probe=max_probe, stream_bytes=sum(len(s) for s in streams),
                    unique_sources=len(sources), sha256=hashlib.sha256(pack).hexdigest())

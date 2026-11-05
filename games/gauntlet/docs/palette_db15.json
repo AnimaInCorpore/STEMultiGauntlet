@@ -1,6 +1,6 @@
 {
  "name": "Gauntlet target palette: DawnBringer 16 minus its brown, its cyan as a dark grey, on the STE grid, plus a glow slot",
- "status": "chosen 2026-10-26 (user); the port's default since 2026-10-26 (tools/assets.py: every scene palette; GAUNTLET_PALETTE=scenes: the fitted ones)",
+ "status": "chosen 2026-10-26 (user); default until 2026-11-05, now retained with GAUNTLET_PALETTE=db15. The default is the bounded source-RGB fit (docs/palette-adaptation.md); GAUNTLET_PALETTE=scenes selects the earlier fitted scenes.",
  "origin": "DawnBringer 16 (lospec.com/palette-list/dawnbringer-16) snapped to the STE's 4 bits per channel, #854c30 (brown) left out. Chosen by eye over the fitted palettes (docs/scenes.json, docs/palette.json) and over palettes from jsoklabquantizer's optimized mode (main ddb38df: free OKLab on the STE grid, per-sprite minimax, key colours, shade weight, anchor palette), on MAME frames of all four players, all seven monsters with their generators, the item legend and the demo maze. Dropping DB16's red instead cost least by the optimizer's score, but turned the demons and the Warrior orange-brown; dropping the grey turned the floor purple-blue; letting the colours move (anchor radius 5 or 10) turned the floor brown or green.",
  "mapping": "nearest colour in OKLab with lightness scaled by 0.5 (hue shifts cost more than shading shifts), as jsoklabquantizer maps",
  "colours": [

@@ -81,13 +81,11 @@ def build_harness(defines=()):
     from patch import write_map
     build = build_dir("gauntlet")
     write_map(build)
-    if not (build / "palette.bin").exists() or not (build / "sprite_code.s").exists():
+    if not assets.current() or not (build / "palette.bin").exists() or not (build / "sprite_code.s").exists():
         assets.build()
-    if "RESIDENT=0" not in defines and not all((build / n).exists() for n in ("resident.i", "SPRITES.DAT")):
+    if "RESIDENT=0" not in defines:
         import resident_sprites
-        if not (build / "resident_inputs.json").exists():
-            resident_sprites.collect(argparse.Namespace(seed=0, level=0, frames=3600, first=400, every=3, fixtures=True))
-        resident_sprites.build(argparse.Namespace(order="mask"))
+        resident_sprites.ensure()
     src = src_dir("gauntlet")
     inc = ["-I", str(build), "-I", str(RT_INCLUDE)]
     obj = build / "render_test.o"

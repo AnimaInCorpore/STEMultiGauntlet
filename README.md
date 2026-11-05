@@ -76,6 +76,7 @@ Needed:
 - Python 3 with `numpy`, `pillow` and `machine68k` in `venv/` (on Windows: MSYS2's mingw64 Python, for example
   `C:/msys64/mingw64/bin/python3.exe -m venv --system-site-packages venv`)
 - vasm and vlink: taken from `C:/Arbeit/F030Arcade/third_party/` on Windows, or set `VASM` and `VLINK`
+- Node.js (`node` on PATH) for the build-time palette fitter
 - the tests' reference board compiles MAME's 68010 core once: a C++ compiler (`c++`, or set `CXX`)
 
 ```bash
@@ -140,6 +141,9 @@ venv/bin/python games/gauntlet/tools/logic_test.py 8000 --seed 12
   players), in any level. `--profile` breaks the cost of a picture down by routine.
 - `sprite_test.py`: motion objects at every screen edge, all 16 shifts, transparent holes, shadows and 64 KB crossings.
 - `logic_test.py`: the patched program against the original, frame for frame.
+- `palette_test.py`: player anchors, reserved band/glow slot, preserved title/HUD tables, constrained checker pairs
+  and flat text (`venv/bin/python games/gauntlet/tools/palette_test.py`). The shared fitter contracts run with
+  `venv/bin/python engine/palette_quantize_test.py`.
 
 The sound tests and the checks of the reference board against MAME 0.289 are listed in the
 [game README](games/gauntlet/README.md).

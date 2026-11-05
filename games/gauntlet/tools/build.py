@@ -115,11 +115,7 @@ def main():
     assets.build()                        # (src/render.s's data: tools/assets.py)
     if "RESIDENT=0" not in args.defines:
         import resident_sprites
-        if not (build / "resident_inputs.json").exists():
-            resident_sprites.collect(argparse.Namespace(seed=0, level=0, frames=3600, first=400, every=3, fixtures=True))
-            resident_sprites.collect(argparse.Namespace(seed=12, level=5, frames=4000, first=400, every=3, fixtures=False))
-            resident_sprites.collect(argparse.Namespace(seed=14, level=9, frames=4000, first=400, every=3, fixtures=False))
-        resident_sprites.build(argparse.Namespace(order="mask"))
+        resident_sprites.ensure()
     import sound                          # build/gauntlet/sound_data.s, gauntlet_speech/_adpcm.bin (src/sound_out.s)
     sound.build(build)
     defs = list(args.defines) + (["SIM=1"] if args.sim else []) + (["NET=1"] if args.net else [])
